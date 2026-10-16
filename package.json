@@ -1,6 +1,6 @@
 {
-  "name": "mafia-game-online",
-  "version": "1.0.0",
+  "name": "mafia-online-game",
+  "version": "2.0.0",
   "description": "Multiplayer Mafia Game with WebSockets",
   "main": "server.js",
   "scripts": {
@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "socket.io": "^4.7.5",
-    "uuid": "^9.0.1"
+    "socket.io": "^4.7.5"
   }
 }
