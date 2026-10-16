@@ -118,7 +118,7 @@
 
     const PHASE_LABELS = {
       LOBBY: 'Лобби', ROLE_REVEAL: 'Раздача ролей', FIRST_NIGHT_INTRO: 'Знакомство мафии',
-      NIGHT: 'Ночь', MORNING_LAST_WORDS: 'Утро', DAY: 'День', VOTING: 'Голосование',
+      NIGHT: 'Ночь', MORNING_LAST_WORDS: 'Утро', DAY: 'День', VOTING: 'Голосование', CONFIRM_VOTE: 'Вердикт',
       KAMIKAZE_REVENGE: 'Месть Камикадзе', GAME_OVER: 'Конец игры'
     };
 
@@ -409,9 +409,33 @@
         socket.emit('kamikaze:shoot', { roomId: roomData.roomId, targetId: victimId });
       };
 
-      const activeRolesInMatch = roomData?.settings?.deck
+      const updateTime = (key, delta) => {
+        if (!isHost) return;
+        const cur = roomData.settings[key] || 30;
+        socket.emit('room:update_settings', { roomId: roomData.roomId, times: { [key]: Math.max(10, Math.min(300, cur + delta)) } });
+      };
+
+      const nightReady = () => {
+        socket.emit('night:ready', { roomId: roomData.roomId });
+        setActionConfirmed(true);
+      };
+
+      const submitConfirm = (vote) => {
+        setPrimaryTarget(vote);
+        socket.emit('day:confirm', { roomId: roomData.roomId, vote });
+      };
+
+      const deckEntries = roomData?.settings?.deck
         ? Object.entries(roomData.settings.deck).filter(([_, c]) => c > 0) : [];
-      const totalDeckCards = activeRolesInMatch.reduce((s, [_, c]) => s + c, 0);
+      const totalDeckCards = deckEntries.reduce((s, [_, c]) => s + c, 0);
+      // Роли погибших (убитых или казненных) убираются из списка «в игре»
+      const deadCounts = {};
+      (roomData?.players || []).forEach(p => {
+        if (!p.isAlive && p.originalRole) deadCounts[p.originalRole] = (deadCounts[p.originalRole] || 0) + 1;
+      });
+      const activeRolesInMatch = deckEntries
+        .map(([k, c]) => [k, c - (deadCounts[k] || 0)])
+        .filter(([_, c]) => c > 0);
 
       const primaryLabel =
         myRole === 'necromancer' ? '1. Выберите погибшего игрока, чью способность хотите воскресить:'
@@ -629,6 +653,19 @@
                     Фракция Камикадзе: {roomData.settings.kamikazeFaction === 'BLACK' ? 'ЧЕРНЫЙ (За Мафию)' : 'КРАСНЫЙ (За Мирных)'}
                   </button>
                 </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[['discussionTime', '☀️ Обсуждение'], ['nightActionTime', '🌙 Ночь'], ['votingTime', '🗳️ Голосование'], ['confirmTime', '⚖️ Да/Нет']].map(([key, label]) => (
+                    <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl p-2 text-center">
+                      <div className="text-[11px] text-slate-400 mb-1">{label}</div>
+                      <div className="flex items-center justify-center gap-1.5">
+                        {isHost && <button onClick={() => updateTime(key, -5)} className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-xs font-bold">-</button>}
+                        <span className="font-mono font-bold text-amber-400 text-sm">{roomData.settings[key]}с</span>
+                        {isHost && <button onClick={() => updateTime(key, 5)} className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-xs font-bold">+</button>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[430px] overflow-y-auto pr-1">
                   {Object.entries(ROLES_CATALOG).map(([roleKey, info]) => {
                     const count = roomData.settings.deck[roleKey] || 0;
@@ -707,7 +744,7 @@
 
               <div className="bg-slate-900/95 border border-amber-500/30 rounded-2xl p-3.5 shadow-lg">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-400">
-                  📌 Роли в текущей партии (нажмите для просмотра правил):
+                  📌 Роли, оставшиеся в игре (нажмите для просмотра правил):
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {activeRolesInMatch.map(([roleKey, count]) => {
@@ -802,8 +839,35 @@
                     </div>
                   )}
 
+                  {/* Вердикт: вешаем или нет */}
+                  {phaseInfo.status === 'CONFIRM_VOTE' && roomData.accusedId && (() => {
+                    const accused = roomData.players.find(p => p.id === roomData.accusedId);
+                    const isAccused = roomData.accusedId === socket.id;
+                    return (
+                      <div className="bg-slate-900 border-2 border-red-600/70 rounded-2xl p-5 space-y-3">
+                        <h3 className="text-lg font-extrabold text-red-400">⚖️ Вешаем {accused?.name}?</h3>
+                        {isAccused ? (
+                          <p className="text-sm text-slate-300">Решается ваша судьба. Используйте чат, чтобы оправдаться!</p>
+                        ) : isAlive ? (
+                          <div className="grid grid-cols-2 gap-3">
+                            <button onClick={() => submitConfirm('yes')}
+                              className={`py-3 rounded-xl font-bold border transition ${primaryTarget === 'yes' ? 'bg-red-600 border-red-300 text-white' : 'bg-slate-950 border-red-800 text-red-300 hover:bg-red-950'}`}>
+                              👍 ДА, вешаем
+                            </button>
+                            <button onClick={() => submitConfirm('no')}
+                              className={`py-3 rounded-xl font-bold border transition ${primaryTarget === 'no' ? 'bg-emerald-600 border-emerald-300 text-white' : 'bg-slate-950 border-emerald-800 text-emerald-300 hover:bg-emerald-950'}`}>
+                              👎 НЕТ, помиловать
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-slate-400">Мертвые не голосуют.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Ночные действия */}
-                  {phaseInfo.status === 'NIGHT' && isAlive && myRoleInfo && myRoleInfo.targetMode !== 'NONE' && (
+                  {phaseInfo.status === 'NIGHT' && isAlive && myRoleInfo && (
                     <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-5 space-y-4">
                       <div className="flex justify-between items-center">
                         <h3 className="text-sm font-bold uppercase tracking-wider text-indigo-300">
@@ -814,8 +878,16 @@
                         )}
                       </div>
 
-                      {myRole === 'mirror' && phaseInfo.round > 1 ? (
-                        <p className="text-xs text-slate-400">Вы уже выбрали донора в первую ночь. Ожидайте его судьбы.</p>
+                      {myRoleInfo.targetMode === 'NONE' || (myRole === 'mirror' && phaseInfo.round > 1) ? (
+                        <div className="space-y-3">
+                          <p className="text-xs text-slate-400">
+                            {myRoleInfo.targetMode === 'NONE' ? 'У вас нет ночных способностей. Нажмите, когда будете готовы — остальные увидят, что вы закончили.' : 'Вы уже выбрали донора в первую ночь. Ожидайте его судьбы.'}
+                          </p>
+                          <button onClick={nightReady} disabled={actionConfirmed}
+                            className="w-full bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-sm transition">
+                            😴 Спокойно спать
+                          </button>
+                        </div>
                       ) : (
                         <>
                           <div className="space-y-2">
@@ -851,6 +923,10 @@
                           <button onClick={submitNightAction}
                             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm transition">
                             Подтвердить ночной ход
+                          </button>
+                          <button onClick={nightReady} disabled={actionConfirmed}
+                            className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold py-2 rounded-xl text-xs transition">
+                            Пропустить ход
                           </button>
                         </>
                       )}
@@ -889,7 +965,7 @@
                       <div ref={chatEndRef} />
                     </div>
 
-                    {isAlive && ['DAY', 'VOTING'].includes(phaseInfo.status) ? (
+                    {isAlive && ['DAY', 'VOTING', 'CONFIRM_VOTE'].includes(phaseInfo.status) ? (
                       <form onSubmit={sendGlobalChat} className="flex gap-2">
                         <input type="text" placeholder="Напишите сообщение городу..." value={globalInput}
                           onChange={e => setGlobalInput(e.target.value)}
