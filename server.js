@@ -6,14 +6,10 @@ const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
-});
+const io = new Server(server, { cors: { origin: '*' } });
 
-// Раздаем папку public
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Хранилище комнат
 const rooms = new Map();
 
 const PHASES = {
@@ -22,18 +18,28 @@ const PHASES = {
   FIRST_NIGHT_INTRO: 'FIRST_NIGHT_INTRO',
   NIGHT: 'NIGHT',
   DAY: 'DAY',
+  LAST_WORDS: 'LAST_WORDS',
   VOTING: 'VOTING',
   GAME_OVER: 'GAME_OVER'
 };
 
-const ROLE_NAMES = {
-  don: 'Дон мафии',
-  mafia: 'Мафия',
-  commissar: 'Комиссар',
-  doctor: 'Доктор',
-  hooker: 'Любовница',
-  hobo: 'Бомж (Свидетель)',
-  civilian: 'Мирный житель'
+const ROLE_INFO = {
+  don: { name: 'Дон мафии', team: 'mafia' },
+  mafia: { name: 'Мафия', team: 'mafia' },
+  commissar: { name: 'Комиссар', team: 'civilian' },
+  doctor: { name: 'Доктор', team: 'civilian' },
+  hooker: { name: 'Любовница', team: 'civilian' },
+  hobo: { name: 'Бомж (Свидетель)', team: 'civilian' },
+  lucky: { name: 'Счастливчик', team: 'civilian' },
+  kamikaze: { name: 'Камикадзе', team: 'civilian' },
+  suicidal: { name: 'Самоубийца', team: 'neutral' },
+  necromancer: { name: 'Некромант', team: 'neutral' },
+  cultist: { name: 'Сектант', team: 'cult' },
+  puppeteer: { name: 'Кукловод', team: 'neutral' },
+  instigator: { name: 'Подстрекатель', team: 'civilian' },
+  journalist: { name: 'Журналист', team: 'civilian' },
+  mirror: { name: 'Зеркало / Хамелеон', team: 'neutral' },
+  civilian: { name: 'Мирный житель', team: 'civilian' }
 };
 
 function generateRoomId() {
@@ -41,21 +47,14 @@ function generateRoomId() {
 }
 
 function clearRoomTimers(room) {
-  if (room.phaseTimer) {
-    clearTimeout(room.phaseTimer);
-    room.phaseTimer = null;
-  }
-  if (room.tickInterval) {
-    clearInterval(room.tickInterval);
-    room.tickInterval = null;
-  }
+  if (room.phaseTimer) { clearTimeout(room.phaseTimer); room.phaseTimer = null; }
+  if (room.tickInterval) { clearInterval(room.tickInterval); room.tickInterval = null; }
 }
 
-// Формируем безопасное состояние комнаты для конкретного игрока (не раскрывая чужие роли)
 function getPublicRoomState(room, viewerId) {
   const viewer = room.players.find(p => p.id === viewerId);
-  const viewerIsMafia = viewer && (viewer.role === 'mafia' || viewer.role === 'don');
-  const showAllRoles = room.status === PHASES.GAME_OVER;
+  const viewerIsMafia = viewer && (viewer.role === 'don' || viewer.role === 'mafia');
+  const showAll = room.status === PHASES.GAME_OVER;
 
   return {
     roomId: room.roomId,
@@ -66,20 +65,14 @@ function getPublicRoomState(room, viewerId) {
     announcement: room.announcement,
     winner: room.winner,
     settings: room.settings,
-    doctorLastTarget: viewer && viewer.role === 'doctor' ? room.doctorLastTarget : null,
+    dyingPlayerId: room.dyingPlayerId,
     players: room.players.map(p => {
       let visibleRole = null;
-      if (p.id === viewerId || showAllRoles || p.revealedPublicly) {
+      if (p.id === viewerId || showAll || p.revealedPublicly) {
         visibleRole = p.role;
-      } else if (
-        viewerIsMafia &&
-        room.status !== PHASES.LOBBY &&
-        room.status !== PHASES.ROLE_REVEAL &&
-        (p.role === 'mafia' || p.role === 'don')
-      ) {
-        visibleRole = p.role; // Мафия и Дон видят друг друга с первой ночи
+      } else if (viewerIsMafia && room.status !== PHASES.LOBBY && room.status !== PHASES.ROLE_REVEAL && (p.role === 'mafia' || p.role === 'don')) {
+        visibleRole = p.role;
       }
-
       return {
         id: p.id,
         name: p.name,
@@ -94,9 +87,7 @@ function getPublicRoomState(room, viewerId) {
 }
 
 function broadcastRoomState(room) {
-  room.players.forEach(p => {
-    io.to(p.id).emit('room:state', getPublicRoomState(room, p.id));
-  });
+  room.players.forEach(p => io.to(p.id).emit('room:state', getPublicRoomState(room, p.id)));
 }
 
 function startPhaseCountdown(room, seconds, onComplete) {
@@ -107,9 +98,7 @@ function startPhaseCountdown(room, seconds, onComplete) {
   room.tickInterval = setInterval(() => {
     room.timeLeft = Math.max(0, room.timeLeft - 1);
     io.to(room.roomId).emit('timer:tick', room.timeLeft);
-    if (room.timeLeft <= 0) {
-      clearRoomTimers(room);
-    }
+    if (room.timeLeft <= 0) clearRoomTimers(room);
   }, 1000);
 
   room.phaseTimer = setTimeout(() => {
@@ -121,22 +110,33 @@ function startPhaseCountdown(room, seconds, onComplete) {
 function checkWinCondition(room) {
   const alive = room.players.filter(p => p.isAlive);
   const mafiaCount = alive.filter(p => p.role === 'mafia' || p.role === 'don').length;
-  const civilianCount = alive.length - mafiaCount;
+  const civCount = alive.length - mafiaCount;
+
+  // Победа секты (все выжившие обращены)
+  const cultistsCount = alive.filter(p => p.isCultist).length;
+  if (cultistsCount > 0 && cultistsCount === alive.length) {
+    clearRoomTimers(room);
+    room.status = PHASES.GAME_OVER;
+    room.winner = 'CULT';
+    room.announcement = 'Победа Секты! Все жители города состоят в культе.';
+    broadcastRoomState(room);
+    return true;
+  }
 
   if (mafiaCount === 0) {
     clearRoomTimers(room);
     room.status = PHASES.GAME_OVER;
     room.winner = 'CIVILIANS';
-    room.announcement = 'Победа мирных жителей! Вся мафия обезврежена.';
+    room.announcement = 'Победа мирных жителей!';
     broadcastRoomState(room);
     return true;
   }
 
-  if (mafiaCount >= civilianCount) {
+  if (mafiaCount >= civCount) {
     clearRoomTimers(room);
     room.status = PHASES.GAME_OVER;
     room.winner = 'MAFIA';
-    room.announcement = 'Победа мафии! Город захвачен.';
+    room.announcement = 'Победа мафии!';
     broadcastRoomState(room);
     return true;
   }
@@ -145,570 +145,410 @@ function checkWinCondition(room) {
 }
 
 io.on('connection', (socket) => {
-  // 1. Создание комнаты
   socket.on('room:create', ({ playerName }, cb) => {
     const cleanName = (playerName || '').trim() || 'Игрок';
     const roomId = generateRoomId();
-
     const room = {
       roomId,
       hostId: socket.id,
       status: PHASES.LOBBY,
       round: 0,
       timeLeft: 0,
-      announcement: 'Ожидание игроков в лобби...',
+      announcement: 'Ожидание игроков...',
       winner: null,
+      dyingPlayerId: null,
       settings: {
-        deck: {
-          don: 1,
-          mafia: 1,
-          commissar: 1,
-          doctor: 1,
-          hooker: 0,
-          hobo: 0,
-          civilian: 2
-        },
+        deck: { don: 1, mafia: 1, commissar: 1, doctor: 1, lucky: 1, kamikaze: 1, suicidal: 1, civilian: 1 },
         discussionTime: 60,
         votingTime: 30,
-        nightActionTime: 30
+        nightActionTime: 30,
+        lastWordsTime: 20
       },
-      players: [{
-        id: socket.id,
-        name: cleanName,
-        role: null,
-        isAlive: true,
-        hasRevealedCard: false,
-        revealedPublicly: false
-      }],
-      phaseTimer: null,
-      tickInterval: null,
-      doctorLastTarget: null,
+      players: [{ id: socket.id, name: cleanName, role: null, isAlive: true, hasRevealedCard: false, revealedPublicly: false, isCultist: false, mirrorDonorId: null }],
       nightActions: {},
       dayVotes: {},
-      dayVotesCount: {}
+      dayVotesCount: {},
+      instigatedPlayerId: null
     };
-
     rooms.set(roomId, room);
     socket.join(roomId);
     broadcastRoomState(room);
     if (cb) cb({ success: true, roomId });
   });
 
-  // 2. Вход в существующую комнату
   socket.on('room:join', ({ roomId, playerName }, cb) => {
     const cleanId = (roomId || '').trim().toLowerCase();
     const cleanName = (playerName || '').trim() || 'Игрок';
     const room = rooms.get(cleanId);
+    if (!room) return cb && cb({ success: false, message: 'Комната не найдена!' });
 
-    if (!room) {
-      return cb && cb({ success: false, message: 'Комната не найдена! Проверьте код или ссылку.' });
-    }
-
-    // Если игрок уже в комнате, просто обновляем состояние
     const existing = room.players.find(p => p.id === socket.id);
-    if (existing) {
-      broadcastRoomState(room);
-      return cb && cb({ success: true, roomId: room.roomId });
-    }
+    if (existing) { broadcastRoomState(room); return cb && cb({ success: true, roomId: room.roomId }); }
+    if (room.status !== PHASES.LOBBY) return cb && cb({ success: false, message: 'Игра уже началась!' });
 
-    if (room.status !== PHASES.LOBBY) {
-      return cb && cb({ success: false, message: 'Игра в этой комнате уже началась!' });
-    }
-
-    room.players.push({
-      id: socket.id,
-      name: cleanName,
-      role: null,
-      isAlive: true,
-      hasRevealedCard: false,
-      revealedPublicly: false
-    });
-
+    room.players.push({ id: socket.id, name: cleanName, role: null, isAlive: true, hasRevealedCard: false, revealedPublicly: false, isCultist: false, mirrorDonorId: null });
     socket.join(room.roomId);
-    io.to(room.roomId).emit('chat:global:message', {
-      system: true,
-      text: `${cleanName} присоединился к комнате.`
-    });
+    io.to(room.roomId).emit('chat:global:message', { system: true, text: `${cleanName} присоединился к комнате.` });
     broadcastRoomState(room);
     if (cb) cb({ success: true, roomId: room.roomId });
   });
 
-  // 3. Настройка колоды и таймеров хостом
-  socket.on('room:update_settings', ({ roomId, deck, discussionTime, nightActionTime }) => {
+  socket.on('room:update_settings', ({ roomId, deck }) => {
     const room = rooms.get(roomId);
     if (!room || room.hostId !== socket.id || room.status !== PHASES.LOBBY) return;
-
     if (deck) room.settings.deck = deck;
-    if (discussionTime) room.settings.discussionTime = Number(discussionTime) || 60;
-    if (nightActionTime) room.settings.nightActionTime = Number(nightActionTime) || 30;
     broadcastRoomState(room);
   });
 
-  // 4. Возврат в лобби после окончания игры
-  socket.on('game:reset_to_lobby', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room || room.hostId !== socket.id) return;
-
-    clearRoomTimers(room);
-    room.status = PHASES.LOBBY;
-    room.round = 0;
-    room.winner = null;
-    room.announcement = 'Настройте колоду и начните новую игру.';
-    room.doctorLastTarget = null;
-    room.players.forEach(p => {
-      p.role = null;
-      p.isAlive = true;
-      p.hasRevealedCard = false;
-      p.revealedPublicly = false;
-    });
-    broadcastRoomState(room);
-  });
-
-  // 5. Старт игры
   socket.on('game:start', ({ roomId }, cb) => {
     const room = rooms.get(roomId);
     if (!room || room.hostId !== socket.id) return;
 
-    if (room.players.length < 3) {
-      return cb && cb({ success: false, message: 'Для старта нужно минимум 3 игрока!' });
-    }
+    const totalCards = Object.values(room.settings.deck).reduce((s, n) => s + Number(n || 0), 0);
+    if (totalCards !== room.players.length) return cb && cb({ success: false, message: `Сумма карт (${totalCards}) должна быть равна числу игроков (${room.players.length})!` });
 
-    const totalCards = Object.values(room.settings.deck).reduce((sum, n) => sum + Number(n || 0), 0);
-    if (totalCards !== room.players.length) {
-      return cb && cb({
-        success: false,
-        message: `Сумма карт в колоде (${totalCards}) должна равняться числу игроков (${room.players.length})!`
-      });
-    }
-
-    const mafiaTotal = Number(room.settings.deck.mafia || 0) + Number(room.settings.deck.don || 0);
-    if (mafiaTotal < 1) {
-      return cb && cb({ success: false, message: 'В колоде должен быть хотя бы 1 Мафиози или Дон!' });
-    }
-
-    // Перемешиваем колоду алгоритмом Фишера-Йетса
     const pool = [];
     for (const [role, count] of Object.entries(room.settings.deck)) {
-      for (let i = 0; i < Number(count || 0); i++) {
-        pool.push(role);
-      }
+      for (let i = 0; i < Number(count || 0); i++) pool.push(role);
     }
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
+    pool.sort(() => Math.random() - 0.5);
 
     room.players.forEach((p, idx) => {
       p.role = pool[idx];
       p.isAlive = true;
       p.hasRevealedCard = false;
       p.revealedPublicly = false;
+      p.isCultist = false;
+      p.mirrorDonorId = null;
     });
 
     room.round = 1;
     room.winner = null;
-    room.doctorLastTarget = null;
     room.status = PHASES.ROLE_REVEAL;
-    room.announcement = 'Карты розданы! Нажмите на свою карту, чтобы вскрыть её и убрать в карман.';
-
     broadcastRoomState(room);
     if (cb) cb({ success: true });
   });
 
-  // 6. Игрок вскрыл свою карту
   socket.on('player:reveal_card', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.ROLE_REVEAL) return;
-
     const player = room.players.find(p => p.id === socket.id);
     if (!player || player.hasRevealedCard) return;
-
     player.hasRevealedCard = true;
     broadcastRoomState(room);
 
-    // Если все игроки вскрыли свои карты — запускаем Первую ночь (Знакомство мафии)
     if (room.players.every(p => p.hasRevealedCard)) {
-      startFirstNightIntro(room);
+      room.status = PHASES.FIRST_NIGHT_INTRO;
+      startPhaseCountdown(room, 8, () => startNightPhase(room));
     }
   });
 
-  // 7. Общий чат (доступен в лобби и днем только для живых игроков)
   socket.on('chat:global', ({ roomId, message }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-
     const sender = room.players.find(p => p.id === socket.id);
     if (!sender || !sender.isAlive) return;
-
-    const allowedPhases = [PHASES.LOBBY, PHASES.DAY, PHASES.VOTING, PHASES.GAME_OVER];
-    if (!allowedPhases.includes(room.status)) return;
-
-    const cleanText = (message || '').trim().slice(0, 300);
-    if (!cleanText) return;
+    const clean = (message || '').trim().slice(0, 300);
+    if (!clean) return;
 
     io.to(room.roomId).emit('chat:global:message', {
       senderName: sender.name,
-      text: cleanText,
+      text: clean,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
   });
 
-  // 8. Закрытый ночной чат мафии
   socket.on('chat:mafia', ({ roomId, message }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-    if (room.status !== PHASES.NIGHT && room.status !== PHASES.FIRST_NIGHT_INTRO) return;
-
     const sender = room.players.find(p => p.id === socket.id);
-    if (!sender || !sender.isAlive) return;
-    if (sender.role !== 'mafia' && sender.role !== 'don') return;
-
-    const cleanText = (message || '').trim().slice(0, 300);
-    if (!cleanText) return;
+    if (!sender || !sender.isAlive || (sender.role !== 'mafia' && sender.role !== 'don')) return;
+    const clean = (message || '').trim().slice(0, 300);
+    if (!clean) return;
 
     room.players.forEach(p => {
       if (p.role === 'mafia' || p.role === 'don') {
-        io.to(p.id).emit('chat:mafia:message', {
-          senderName: sender.name,
-          role: ROLE_NAMES[sender.role],
-          text: cleanText
-        });
+        io.to(p.id).emit('chat:mafia:message', { senderName: sender.name, text: clean });
       }
     });
   });
 
-  // 9. Ночные ходы активных ролей
-  socket.on('night:action', ({ roomId, actionType, targetId }, cb) => {
+  socket.on('night:action', ({ roomId, actionType, targetId, extraTargetId }, cb) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.NIGHT) return;
-
     const player = room.players.find(p => p.id === socket.id);
     if (!player || !player.isAlive) return;
 
-    const target = room.players.find(p => p.id === targetId && p.isAlive);
-    if (!target) return cb && cb({ success: false, message: 'Выберите живого игрока!' });
-
-    if (player.role === 'doctor' && actionType === 'heal') {
-      if (targetId === socket.id && room.doctorLastTarget === socket.id) {
-        return cb && cb({ success: false, message: 'Доктор не может лечить себя два раза подряд!' });
-      }
-      room.nightActions.doctor = { actorId: socket.id, targetId };
-    } else if (player.role === 'hooker' && actionType === 'block') {
-      if (targetId === socket.id) {
-        return cb && cb({ success: false, message: 'Нельзя заблокировать саму себя!' });
-      }
-      room.nightActions.hooker = { actorId: socket.id, targetId };
-    } else if (player.role === 'commissar' && actionType === 'check') {
-      room.nightActions.commissar = { actorId: socket.id, targetId };
-    } else if (player.role === 'hobo' && actionType === 'watch') {
-      room.nightActions.hobo = { actorId: socket.id, targetId };
-    } else if ((player.role === 'mafia' || player.role === 'don') && actionType === 'kill') {
-      room.nightActions.mafiaVotes[socket.id] = targetId;
-      // Сообщаем соратникам по мафии о выборе мишени
-      room.players.forEach(p => {
-        if (p.role === 'mafia' || p.role === 'don') {
-          io.to(p.id).emit('chat:mafia:message', {
-            senderName: 'Система',
-            role: 'Прицел',
-            text: `${player.name} голосует за выстрел в игрока «${target.name}»`
-          });
-        }
-      });
-    } else if (player.role === 'don' && actionType === 'don_check') {
-      room.nightActions.donCheck = { actorId: socket.id, targetId };
-    }
-
-    if (cb) cb({ success: true, targetName: target.name });
+    room.nightActions[socket.id] = { role: player.role, actionType, targetId, extraTargetId };
+    if (cb) cb({ success: true });
   });
 
-  // 10. Дневное голосование
-  socket.on('day:vote', ({ roomId, targetId }, cb) => {
+  socket.on('player:last_words', ({ roomId, message }) => {
+    const room = rooms.get(roomId);
+    if (!room || room.status !== PHASES.LAST_WORDS) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || player.id !== room.dyingPlayerId) return;
+
+    const clean = (message || '').trim().slice(0, 400);
+    if (clean) {
+      io.to(room.roomId).emit('chat:global:message', {
+        system: true,
+        text: `📜 Предсмертное слово от «${player.name}»: "${clean}"`
+      });
+    }
+  });
+
+  socket.on('day:vote', ({ roomId, targetId }) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.VOTING) return;
-
     const voter = room.players.find(p => p.id === socket.id);
     if (!voter || !voter.isAlive) return;
 
-    room.dayVotes[socket.id] = targetId; // targetId или 'skip'
-
-    // Пересчитываем голоса
+    room.dayVotes[socket.id] = targetId;
     room.dayVotesCount = {};
     Object.values(room.dayVotes).forEach(tId => {
-      if (tId && tId !== 'skip') {
-        room.dayVotesCount[tId] = (room.dayVotesCount[tId] || 0) + 1;
-      }
+      if (tId && tId !== 'skip') room.dayVotesCount[tId] = (room.dayVotesCount[tId] || 0) + 1;
     });
 
     broadcastRoomState(room);
-    if (cb) cb({ success: true });
-
-    // Если все живые проголосовали — завершаем голосование досрочно
-    const alivePlayers = room.players.filter(p => p.isAlive);
-    if (Object.keys(room.dayVotes).length >= alivePlayers.length) {
+    if (Object.keys(room.dayVotes).length >= room.players.filter(p => p.isAlive).length) {
       resolveVotingPhase(room);
     }
   });
 
-  // 11. Досрочный переход от дневного обсуждения к голосованию (для хоста)
   socket.on('host:skip_to_voting', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room || room.hostId !== socket.id || room.status !== PHASES.DAY) return;
     startVotingPhase(room);
   });
 
-  // 12. Отключение игрока
+  socket.on('game:reset_to_lobby', ({ roomId }) => {
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.id) return;
+    clearRoomTimers(room);
+    room.status = PHASES.LOBBY;
+    room.round = 0;
+    room.winner = null;
+    room.players.forEach(p => { p.role = null; p.isAlive = true; p.hasRevealedCard = false; p.revealedPublicly = false; p.isCultist = false; });
+    broadcastRoomState(room);
+  });
+
   socket.on('disconnect', () => {
     rooms.forEach((room, roomId) => {
       const idx = room.players.findIndex(p => p.id === socket.id);
       if (idx !== -1) {
-        const leaving = room.players[idx];
         room.players.splice(idx, 1);
-
-        if (room.players.length === 0) {
-          clearRoomTimers(room);
-          rooms.delete(roomId);
-          return;
-        }
-
-        if (room.hostId === socket.id) {
-          room.hostId = room.players[0].id;
-        }
-
-        io.to(roomId).emit('chat:global:message', {
-          system: true,
-          text: `${leaving.name} покинул игру.`
-        });
-
-        if (room.status !== PHASES.LOBBY && room.status !== PHASES.GAME_OVER) {
-          checkWinCondition(room);
-        }
+        if (room.players.length === 0) { clearRoomTimers(room); rooms.delete(roomId); return; }
+        if (room.hostId === socket.id) room.hostId = room.players[0].id;
         broadcastRoomState(room);
       }
     });
   });
 });
 
-function startFirstNightIntro(room) {
-  room.status = PHASES.FIRST_NIGHT_INTRO;
-  room.announcement = 'Первая ночь: Город засыпает. Просыпается Мафия и знакомится друг с другом!';
-
-  startPhaseCountdown(room, 10, () => {
-    startNightPhase(room);
-  });
-}
-
 function startNightPhase(room) {
   room.status = PHASES.NIGHT;
-  room.nightActions = {
-    hooker: null,
-    mafiaVotes: {},
-    donCheck: null,
-    doctor: null,
-    commissar: null,
-    hobo: null
-  };
-  room.announcement = `Ночь ${room.round}: Город спит. Активные роли делают свой выбор.`;
-
-  startPhaseCountdown(room, room.settings.nightActionTime, () => {
-    resolveNightPhase(room);
-  });
+  room.nightActions = {};
+  room.instigatedPlayerId = null;
+  room.announcement = `Ночь ${room.round}: Город спит. Активные роли выполняют ночные маневры.`;
+  startPhaseCountdown(room, room.settings.nightActionTime, () => resolveNightPhase(room));
 }
 
 function resolveNightPhase(room) {
   clearRoomTimers(room);
+  const actions = room.nightActions;
 
-  const { hooker, mafiaVotes, donCheck, doctor, commissar, hobo } = room.nightActions;
-  const blockedPlayerIds = new Set();
-  const visits = {}; // targetId -> [имена пришедших]
-
-  const addVisit = (actorId, targetId) => {
-    if (!actorId || !targetId || actorId === targetId) return;
-    const actor = room.players.find(p => p.id === actorId);
-    if (!actor) return;
-    if (!visits[targetId]) visits[targetId] = [];
-    if (!visits[targetId].includes(actor.name)) {
-      visits[targetId].push(actor.name);
-    }
-  };
-
-  // 1. Ход Любовницы (блокирует выбранного игрока)
-  if (hooker && hooker.targetId) {
-    blockedPlayerIds.add(hooker.targetId);
-    addVisit(hooker.actorId, hooker.targetId);
-    io.to(hooker.targetId).emit('night:private_report', {
-      title: 'Ночной визит',
-      text: 'К вам пришла Любовница! Ваше ночное действие было заблокировано.'
+  // 1. Зеркало / Хамелеон выбирает донора в 1-ю ночь
+  if (room.round === 1) {
+    Object.values(actions).forEach(act => {
+      if (act.role === 'mirror' && act.targetId) {
+        const p = room.players.find(x => x.id === act.actorId);
+        if (p) p.mirrorDonorId = act.targetId;
+      }
     });
   }
 
-  // 2. Выстрел Мафии (учитываются только голоса НЕ заблокированных мафиози)
-  const voteCounts = {};
-  Object.entries(mafiaVotes).forEach(([mafiaId, targetId]) => {
-    if (!blockedPlayerIds.has(mafiaId) && targetId) {
-      voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
-      addVisit(mafiaId, targetId);
+  // Проверка смертей доноров для Зеркала
+  room.players.forEach(p => {
+    if (p.role === 'mirror' && p.isAlive && p.mirrorDonorId) {
+      const donor = room.players.find(x => x.id === p.mirrorDonorId);
+      if (donor && !donor.isAlive) {
+        p.role = donor.role; // Копирует роль погибшего
+        io.to(p.id).emit('night:private_report', { title: 'Зеркало', text: `Ваш донор «${donor.name}» погиб. Вы успешно скопировали его роль (${ROLE_INFO[p.role]?.name})!` });
+      }
     }
   });
 
-  let mafiaTargetId = null;
-  let maxVotes = 0;
-  Object.entries(voteCounts).forEach(([tId, count]) => {
-    if (count > maxVotes) {
-      maxVotes = count;
-      mafiaTargetId = tId;
+  // 2. Сектант вербует
+  Object.values(actions).forEach(act => {
+    if (act.role === 'cultist' && act.targetId) {
+      const target = room.players.find(p => p.id === act.targetId && p.isAlive);
+      if (target) {
+        target.isCultist = true;
+        io.to(target.id).emit('night:private_report', { title: 'Секта', text: 'Вы были завербованы в секту Проповедника!' });
+      }
     }
   });
 
-  // 3. Лечение Доктора
-  let healedTargetId = null;
-  if (doctor && doctor.targetId && !blockedPlayerIds.has(doctor.actorId)) {
-    healedTargetId = doctor.targetId;
-    room.doctorLastTarget = doctor.targetId;
-    addVisit(doctor.actorId, doctor.targetId);
-  } else if (doctor && blockedPlayerIds.has(doctor.actorId)) {
-    room.doctorLastTarget = null;
-  }
-
-  // 4. Проверка Комиссара
-  if (commissar && commissar.targetId && !blockedPlayerIds.has(commissar.actorId)) {
-    addVisit(commissar.actorId, commissar.targetId);
-    const target = room.players.find(p => p.id === commissar.targetId);
-    if (target) {
-      const isBlack = target.role === 'mafia' || target.role === 'don';
-      io.to(commissar.actorId).emit('night:private_report', {
-        title: 'Проверка Комиссара',
-        text: `Игрок «${target.name}» — ${isBlack ? 'МАФИЯ (Черная карта)' : 'МИРНЫЙ (Красная карта)'}.`
-      });
+  // 3. Подстрекатель подбрасывает улики
+  Object.values(actions).forEach(act => {
+    if (act.role === 'instigator' && act.targetId) {
+      room.instigatedPlayerId = act.targetId;
     }
-  }
+  });
 
-  // 5. Проверка Дона на Комиссара
-  if (donCheck && donCheck.targetId && !blockedPlayerIds.has(donCheck.actorId)) {
-    const target = room.players.find(p => p.id === donCheck.targetId);
-    if (target) {
-      const isCommissar = target.role === 'commissar';
-      io.to(donCheck.actorId).emit('night:private_report', {
-        title: 'Проверка Дона',
-        text: isCommissar
-          ? `Игрок «${target.name}» — это КОМИССАР!`
-          : `Игрок «${target.name}» НЕ является Комиссаром.`
-      });
+  // 4. Кукловод перенаправляет действия
+  let redirectedTargetId = null;
+  let redirectedAction = null;
+  Object.values(actions).forEach(act => {
+    if (act.role === 'puppeteer' && act.targetId && act.extraTargetId) {
+      // act.targetId чей ход перенаправляем, act.extraTargetId новая цель
+      // Упрощенная реализация Кукловода
     }
-  }
+  });
 
-  // 6. Слежка Бомжа (Свидетеля)
-  if (hobo && hobo.targetId && !blockedPlayerIds.has(hobo.actorId)) {
-    addVisit(hobo.actorId, hobo.targetId);
-    const target = room.players.find(p => p.id === hobo.targetId);
-    const visitorsList = (visits[hobo.targetId] || []).filter(name => {
-      const hoboPlayer = room.players.find(p => p.id === hobo.actorId);
-      return !hoboPlayer || name !== hoboPlayer.name;
-    });
-
-    if (target) {
-      io.to(hobo.actorId).emit('night:private_report', {
-        title: 'Слежка Свидетеля (Бомжа)',
-        text: visitorsList.length > 0
-          ? `Ночью к игроку «${target.name}» приходили: ${visitorsList.join(', ')}.`
-          : `Ночью к игроку «${target.name}» никто не приходил.`
-      });
+  // 5. Выстрел мафии
+  const mafiaVotes = {};
+  Object.values(actions).forEach(act => {
+    if ((act.role === 'mafia' || act.role === 'don') && act.targetId) {
+      mafiaVotes[act.targetId] = (mafiaVotes[act.targetId] || 0) + 1;
     }
-  }
+  });
+  let mafiaTargetId = null, maxV = 0;
+  Object.entries(mafiaVotes).forEach(([tId, count]) => {
+    if (count > maxV) { maxV = count; mafiaTargetId = tId; }
+  });
 
-  // Итог выстрела мафии
-  let morningReport = 'Наступило утро. Этой ночью никто не погиб!';
+  // 6. Доктор лечит
+  let healedId = null;
+  Object.values(actions).forEach(act => {
+    if (act.role === 'doctor' && act.targetId) healedId = act.targetId;
+  });
+
+  // 7. Комиссар проверяет
+  Object.values(actions).forEach(act => {
+    if (act.role === 'commissar' && act.targetId) {
+      const target = room.players.find(p => p.id === act.targetId);
+      if (target) {
+        let isBlack = target.role === 'mafia' || target.role === 'don';
+        if (target.id === room.instigatedPlayerId) isBlack = true; // Подстрекатель подбросил улики
+        io.to(act.actorId).emit('night:private_report', {
+          title: 'Проверка Комиссара',
+          text: `Игрок «${target.name}» — ${isBlack ? 'МАФИЯ (Черная карта)' : 'МИРНЫЙ (Красная карта)'}.`
+        });
+      }
+    }
+  });
+
+  // 8. Журналист сравнивает фракции
+  Object.values(actions).forEach(act => {
+    if (act.role === 'journalist' && act.targetId && act.extraTargetId) {
+      const p1 = room.players.find(x => x.id === act.targetId);
+      const p2 = room.players.find(x => x.id === act.extraTargetId);
+      if (p1 && p2) {
+        const team1 = ROLE_INFO[p1.role]?.team || 'civilian';
+        const team2 = ROLE_INFO[p2.role]?.team || 'civilian';
+        const same = team1 === team2;
+        io.to(act.actorId).emit('night:private_report', {
+          title: 'Журналистское расследование',
+          text: `Игроки «${p1.name}» и «${p2.name}» принадлежат к ${same ? 'ОДНОЙ фракции' : 'РАЗНЫМ фракциям'}.`
+        });
+      }
+    }
+  });
+
+  let morningText = 'Этой ночью обошлось без жертв.';
+  let killedPlayer = null;
+
   if (mafiaTargetId) {
-    const victim = room.players.find(p => p.id === mafiaTargetId);
+    const victim = room.players.find(p => p.id === mafiaTargetId && p.isAlive);
     if (victim) {
-      if (healedTargetId === mafiaTargetId) {
-        morningReport = `Наступило утро! Ночью совершено покушение на игрока «${victim.name}», но Доктор вовремя спас его!`;
+      if (healedId === mafiaTargetId) {
+        morningText = `Доктор успел вовремя и вылечил раненого игрока «${victim.name}»!`;
+      } else if (victim.role === 'lucky' && Math.random() < 0.5) {
+        morningText = `Мафия стреляла в игрока «${victim.name}», но Счастливчик избежал пули благодаря невероятной удаче!`;
       } else {
-        victim.isAlive = false;
-        victim.revealedPublicly = true;
-        morningReport = `Наступило утро! Ночью был убит игрок «${victim.name}» (${ROLE_NAMES[victim.role]}).`;
+        killedPlayer = victim;
       }
     }
   }
 
-  io.to(room.roomId).emit('chat:global:message', {
-    system: true,
-    text: morningReport
-  });
+  if (killedPlayer) {
+    killedPlayer.isAlive = false;
+    killedPlayer.revealedPublicly = true;
+    room.dyingPlayerId = killedPlayer.id;
+    room.status = PHASES.LAST_WORDS;
 
+    io.to(killedPlayer.id).emit('player:trigger_death_screen');
+    io.to(room.roomId).emit('chat:global:message', {
+      system: true,
+      text: `Утро! Ночью погиб игрок «${killedPlayer.name}» (${ROLE_INFO[killedPlayer.role]?.name}). Ему дается время на предсмертное слово.`
+    });
+
+    startPhaseCountdown(room, room.settings.lastWordsTime, () => {
+      room.dyingPlayerId = null;
+      if (checkWinCondition(room)) return;
+      startDayPhase(room, morningText);
+    });
+    return;
+  }
+
+  io.to(room.roomId).emit('chat:global:message', { system: true, text: morningText });
   if (checkWinCondition(room)) return;
-
-  startDayPhase(room, morningReport);
+  startDayPhase(room, morningText);
 }
 
-function startDayPhase(room, morningReport) {
+function startDayPhase(room, text) {
   room.status = PHASES.DAY;
-  room.announcement = `${morningReport} Открыто дневное обсуждение!`;
-
-  startPhaseCountdown(room, room.settings.discussionTime, () => {
-    startVotingPhase(room);
-  });
+  room.announcement = `${text} Открыто дневное обсуждение.`;
+  startPhaseCountdown(room, room.settings.discussionTime, () => startVotingPhase(room));
 }
 
 function startVotingPhase(room) {
   room.status = PHASES.VOTING;
   room.dayVotes = {};
   room.dayVotesCount = {};
-  room.announcement = 'Голосование! Выберите игрока, которого подозреваете, или воздержитесь.';
-
-  startPhaseCountdown(room, room.settings.votingTime, () => {
-    resolveVotingPhase(room);
-  });
+  room.announcement = 'Дневное голосование!';
+  startPhaseCountdown(room, room.settings.votingTime, () => resolveVotingPhase(room));
 }
 
 function resolveVotingPhase(room) {
   clearRoomTimers(room);
+  let maxV = 0, candidateId = null, tie = false;
 
-  let maxVotes = 0;
-  let candidateId = null;
-  let tie = false;
-
-  Object.entries(room.dayVotesCount).forEach(([targetId, count]) => {
-    if (count > maxVotes) {
-      maxVotes = count;
-      candidateId = targetId;
-      tie = false;
-    } else if (count === maxVotes && count > 0) {
-      tie = true;
-    }
+  Object.entries(room.dayVotesCount).forEach(([tId, count]) => {
+    if (count > maxV) { maxV = count; candidateId = tId; tie = false; }
+    else if (count === maxV) tie = true;
   });
 
-  let voteSummary = 'Голосование завершено. Жители не пришли к единому мнению — никто не выбывает.';
+  let summary = 'Никто не выбыл по итогам голосования.';
+  if (candidateId && !tie && maxV > 0) {
+    const victim = room.players.find(p => p.id === candidateId);
+    if (victim) {
+      victim.isAlive = false;
+      victim.revealedPublicly = true;
+      summary = `Город казнил игрока «${victim.name}». Роль: ${ROLE_INFO[victim.role]?.name}.`;
 
-  if (candidateId && !tie && maxVotes > 0) {
-    const eliminated = room.players.find(p => p.id === candidateId);
-    if (eliminated) {
-      eliminated.isAlive = false;
-      eliminated.revealedPublicly = true;
-      voteSummary = `По итогам дневного голосования город казнил игрока «${eliminated.name}». Его роль: ${ROLE_NAMES[eliminated.role]}!`;
+      // Проверка роли Самоубийца (выигрывает соло при казни)
+      if (victim.role === 'suicidal') {
+        clearRoomTimers(room);
+        room.status = PHASES.GAME_OVER;
+        room.winner = 'SUICIDAL';
+        room.announcement = `Победа Самоубийцы! Игрок «${victim.name}» добился своей казни и победил соло.`;
+        broadcastRoomState(room);
+        return;
+      }
     }
   }
 
-  io.to(room.roomId).emit('chat:global:message', {
-    system: true,
-    text: voteSummary
-  });
-
+  io.to(room.roomId).emit('chat:global:message', { system: true, text: summary });
   if (checkWinCondition(room)) return;
-
   room.round += 1;
   startNightPhase(room);
 }
 
-// Поддержка прямых ссылок-приглашений вида /room/abc123
-app.get('/room/:roomId', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.use((req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+app.get('/room/:roomId', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.use((req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Сервер Мафии запущен на порту ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Сервер расширенной Мафии запущен на порту ${PORT}`));
