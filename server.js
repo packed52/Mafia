@@ -20,6 +20,7 @@ const PHASES = {
   MORNING_LAST_WORDS: 'MORNING_LAST_WORDS',
   DAY: 'DAY',
   VOTING: 'VOTING',
+  CONFIRM_VOTE: 'CONFIRM_VOTE',
   KAMIKAZE_REVENGE: 'KAMIKAZE_REVENGE',
   GAME_OVER: 'GAME_OVER'
 };
@@ -88,6 +89,7 @@ function publicRoom(room, viewerId) {
     round: room.round,
     settings: room.settings,
     kamikazeActorId: room.kamikazeActorId,
+    accusedId: room.accusedId,
     winner: room.winner,
     players: room.players.map(p => {
       const reveal = p.id === viewerId || !p.isAlive || gameOver;
@@ -99,6 +101,7 @@ function publicRoom(room, viewerId) {
         connected: p.connected,
         hasRevealedCard: p.hasRevealedCard,
         role: reveal ? p.role : null,
+        originalRole: reveal ? p.originalRole : null,
         faction: reveal ? p.faction : null,
         isCultMember: p.id === viewerId ? p.isCultMember : false
       };
@@ -123,6 +126,15 @@ function setTimer(room, fn, ms) {
   room.phaseTimer = setTimeout(fn, ms);
 }
 
+function resetRoundState(room) {
+  room.nightActions = {};
+  room.nightDone = {};
+  room.dayVotes = {};
+  room.accusedId = null;
+  room.confirmVotes = {};
+  room.kamikazeActorId = null;
+}
+
 // ---------- Сокеты ----------
 io.on('connection', (socket) => {
   socket.on('room:create', ({ playerName } = {}, callback) => {
@@ -142,15 +154,14 @@ io.on('connection', (socket) => {
         kamikazeFaction: 'BLACK',
         discussionTime: 60,
         nightActionTime: 35,
-        votingTime: 30
+        votingTime: 30,
+        confirmTime: 15
       },
       players: [newPlayer(socket.id, playerName, true)],
       phaseTimer: null,
-      nightActions: {},
-      dayVotes: {},
-      kamikazeActorId: null,
       winner: null
     };
+    resetRoundState(room);
     rooms.set(roomId, room);
     socket.join(roomId);
     callback({ success: true, roomId, room: publicRoom(room, socket.id) });
@@ -172,7 +183,7 @@ io.on('connection', (socket) => {
     callback({ success: true, roomId: cleanId, room: publicRoom(room, socket.id) });
   });
 
-  socket.on('room:update_settings', ({ roomId, deck, kamikazeFaction } = {}) => {
+  socket.on('room:update_settings', ({ roomId, deck, kamikazeFaction, times } = {}) => {
     const room = rooms.get(roomId);
     if (!room || room.hostId !== socket.id || room.status !== PHASES.LOBBY) return;
     if (deck && typeof deck === 'object') {
@@ -183,6 +194,13 @@ io.on('connection', (socket) => {
       room.settings.deck = clean;
     }
     if (['RED', 'BLACK'].includes(kamikazeFaction)) room.settings.kamikazeFaction = kamikazeFaction;
+    // Управление временем фаз (10–300 секунд)
+    if (times && typeof times === 'object') {
+      ['discussionTime', 'nightActionTime', 'votingTime', 'confirmTime'].forEach(key => {
+        const v = parseInt(times[key], 10);
+        if (!isNaN(v)) room.settings[key] = Math.max(10, Math.min(300, v));
+      });
+    }
     emitRoom(room);
   });
 
@@ -206,9 +224,7 @@ io.on('connection', (socket) => {
 
     room.round = 1;
     room.winner = null;
-    room.dayVotes = {};
-    room.nightActions = {};
-    room.kamikazeActorId = null;
+    resetRoundState(room);
     room.players.forEach((player, idx) => {
       const role = rolesPool[idx];
       player.role = role;
@@ -239,9 +255,7 @@ io.on('connection', (socket) => {
     room.status = PHASES.LOBBY;
     room.round = 0;
     room.winner = null;
-    room.nightActions = {};
-    room.dayVotes = {};
-    room.kamikazeActorId = null;
+    resetRoundState(room);
     io.to(roomId).emit('game:restarted');
     emitRoom(room);
   });
@@ -279,7 +293,7 @@ io.on('connection', (socket) => {
   socket.on('chat:global', ({ roomId, message } = {}) => {
     const room = rooms.get(roomId);
     if (!room || typeof message !== 'string' || !message.trim()) return;
-    if (![PHASES.LOBBY, PHASES.DAY, PHASES.VOTING].includes(room.status)) return;
+    if (![PHASES.LOBBY, PHASES.DAY, PHASES.VOTING, PHASES.CONFIRM_VOTE].includes(room.status)) return;
 
     const sender = room.players.find(p => p.id === socket.id);
     if (!sender || (!sender.isAlive && room.status !== PHASES.LOBBY)) return;
@@ -357,6 +371,17 @@ io.on('connection', (socket) => {
     };
 
     socket.emit('night:action_confirmed', { role: player.role, targetId, secondTargetId });
+    markNightDone(room, player);
+  });
+
+  // Игрок без способности (или пропускающий ход) сообщает, что закончил
+  socket.on('night:ready', ({ roomId } = {}) => {
+    const room = rooms.get(roomId);
+    if (!room || room.status !== PHASES.NIGHT) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.isAlive) return;
+    socket.emit('night:action_confirmed', { role: player.role });
+    markNightDone(room, player);
   });
 
   socket.on('day:vote', ({ roomId, targetId } = {}) => {
@@ -367,8 +392,30 @@ io.on('connection', (socket) => {
     const target = room.players.find(p => p.id === targetId && p.isAlive);
     if (!voter || !voter.isAlive || !target) return;
 
+    const prev = room.dayVotes[voter.id];
+    if (prev === target.id) return;
     room.dayVotes[voter.id] = target.id;
     io.to(roomId).emit('day:vote_update', { voterName: voter.name, targetId: target.id });
+    sendSystemChat(roomId, `🗳️ ${voter.name} ${prev ? 'изменил голос и голосует' : 'голосует'} против ${target.name}.`);
+  });
+
+  // Второе голосование: вешаем обвиняемого или нет
+  socket.on('day:confirm', ({ roomId, vote } = {}) => {
+    const room = rooms.get(roomId);
+    if (!room || room.status !== PHASES.CONFIRM_VOTE) return;
+    const voter = room.players.find(p => p.id === socket.id);
+    if (!voter || !voter.isAlive || voter.id === room.accusedId) return;
+
+    const val = vote === 'yes' ? 'yes' : 'no';
+    const prev = room.confirmVotes[voter.id];
+    if (prev === val) return;
+    room.confirmVotes[voter.id] = val;
+    sendSystemChat(roomId, `${val === 'yes' ? '👍' : '👎'} ${voter.name} ${prev ? 'изменил голос:' : 'голосует'} ${val === 'yes' ? 'ЗА казнь' : 'ПРОТИВ казни'}.`);
+
+    const eligible = room.players.filter(p => p.isAlive && p.connected && p.id !== room.accusedId);
+    if (eligible.every(p => room.confirmVotes[p.id])) {
+      setTimer(room, () => resolveConfirm(roomId), 1500);
+    }
   });
 
   socket.on('kamikaze:shoot', ({ roomId, targetId } = {}) => {
@@ -403,6 +450,21 @@ io.on('connection', (socket) => {
 });
 
 // ---------- Фазы ----------
+
+// Публично сообщаем, кто уже закончил ночные дела (без раскрытия цели и роли).
+// Если закончили все живые — ночь завершается досрочно.
+function markNightDone(room, player) {
+  if (room.nightDone[player.id]) return;
+  room.nightDone[player.id] = true;
+  sendSystemChat(room.roomId, `🌙 ${player.name} завершил(а) свои ночные дела.`);
+
+  const pending = room.players.filter(p => p.isAlive && p.connected && !room.nightDone[p.id]);
+  if (pending.length === 0) {
+    sendSystemChat(room.roomId, '🌅 Все готовы — ночь заканчивается досрочно.');
+    setTimer(room, () => resolveNight(room.roomId), 1500);
+  }
+}
+
 function startNightPhase(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -410,6 +472,7 @@ function startNightPhase(roomId) {
 
   room.status = PHASES.NIGHT;
   room.nightActions = {};
+  room.nightDone = {};
 
   emitRoom(room);
   io.to(roomId).emit('game:phase_change', {
@@ -425,6 +488,7 @@ function startNightPhase(roomId) {
 function resolveNight(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== PHASES.NIGHT) return;
+  clearTimeout(room.phaseTimer);
 
   // копии действий, чтобы Кукловод не портил оригинал
   const actions = {};
@@ -729,6 +793,7 @@ function nextRound(roomId) {
   startNightPhase(roomId);
 }
 
+// Итог первого голосования: выбираем обвиняемого и переходим к вердикту «да/нет»
 function resolveDayVoting(roomId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== PHASES.VOTING) return;
@@ -737,18 +802,69 @@ function resolveDayVoting(roomId) {
   Object.values(room.dayVotes).forEach(id => { counts[id] = (counts[id] || 0) + 1; });
 
   let maxVotes = 0;
-  let executedId = null;
+  let accusedId = null;
   let tie = false;
   for (const [id, count] of Object.entries(counts)) {
-    if (count > maxVotes) { maxVotes = count; executedId = id; tie = false; }
+    if (count > maxVotes) { maxVotes = count; accusedId = id; tie = false; }
     else if (count === maxVotes) tie = true;
   }
 
-  if (!executedId || tie) {
+  const summary = Object.entries(counts)
+    .map(([id, n]) => `${room.players.find(p => p.id === id)?.name}: ${n}`).join(', ');
+  if (summary) sendSystemChat(roomId, `📊 Итоги голосования: ${summary}.`);
+
+  if (!accusedId || tie) {
     sendSystemChat(roomId, '⚖️ Голоса разделились или никто не проголосовал. Сегодня никто не казнен.');
     return nextRound(roomId);
   }
 
+  const accused = room.players.find(p => p.id === accusedId);
+  if (!accused || !accused.isAlive) return nextRound(roomId);
+
+  startConfirmPhase(roomId, accused);
+}
+
+function startConfirmPhase(roomId, accused) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  room.status = PHASES.CONFIRM_VOTE;
+  room.accusedId = accused.id;
+  room.confirmVotes = {};
+  sendSystemChat(roomId, `⚖️ Город выдвинул на казнь ${accused.name}. Вешаем игрока? Голосуем ДА или НЕТ!`);
+  emitRoom(room);
+  io.to(roomId).emit('game:phase_change', {
+    status: PHASES.CONFIRM_VOTE,
+    round: room.round,
+    timeLeft: room.settings.confirmTime,
+    message: `Вешаем ${accused.name}? Решите ДА или НЕТ!`
+  });
+  setTimer(room, () => resolveConfirm(roomId), room.settings.confirmTime * 1000);
+}
+
+function resolveConfirm(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== PHASES.CONFIRM_VOTE) return;
+  clearTimeout(room.phaseTimer);
+
+  const accused = room.players.find(p => p.id === room.accusedId);
+  const votes = Object.values(room.confirmVotes);
+  const yes = votes.filter(v => v === 'yes').length;
+  const no = votes.filter(v => v === 'no').length;
+  room.accusedId = null;
+
+  if (!accused || !accused.isAlive) return nextRound(roomId);
+
+  sendSystemChat(roomId, `📊 Вердикт: ЗА — ${yes}, ПРОТИВ — ${no}.`);
+  if (yes > no) return executeDay(roomId, accused.id);
+
+  sendSystemChat(roomId, `🕊️ Город помиловал ${accused.name}. Сегодня никто не казнен.`);
+  nextRound(roomId);
+}
+
+function executeDay(roomId, executedId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
   const executed = room.players.find(p => p.id === executedId);
   if (!executed || !executed.isAlive) return nextRound(roomId);
 
