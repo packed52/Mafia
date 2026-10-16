@@ -40,6 +40,30 @@ const ACTIVE_ROLES = new Set([
   'instigator', 'necromancer', 'cultist', 'puppeteer', 'mirror'
 ]);
 
+const ROLE_NAMES_RU = {
+  civilian: 'Мирный житель', lucky: 'Счастливчик', commissar: 'Комиссар', doctor: 'Доктор',
+  hooker: 'Любовница', hobo: 'Бомж', journalist: 'Журналист', kamikaze: 'Камикадзе',
+  mafia: 'Мафия', don: 'Дон Мафии', instigator: 'Подстрекатель', suicider: 'Самоубийца',
+  necromancer: 'Некромант', cultist: 'Сектант', puppeteer: 'Кукловод', mirror: 'Зеркало'
+};
+const roleRu = (role) => ROLE_NAMES_RU[role] || role;
+
+// Анонимные фразы для чата, когда роль сделала ночной ход (без имён игроков)
+const NIGHT_PHRASES = {
+  commissar: '🕵️ Комиссар вышел на ночное расследование.',
+  doctor: '⚕️ Доктор взял чемоданчик и отправился на вызов.',
+  hooker: '💋 Любовница вышла на ночной промысел.',
+  hobo: '🍾 Бомж пошёл за бутылкой.',
+  journalist: '📰 Журналист засел за новую статью.',
+  mafia: '🦹‍♂️ Мафия сделала свой выбор.',
+  don: '🎩 Дон отдал тайное распоряжение.',
+  instigator: '🐍 Подстрекатель плетёт интриги.',
+  necromancer: '🔮 Некромант зашептал над могилами.',
+  cultist: '🕯️ Проповедник отправился на тайную проповедь.',
+  puppeteer: '🎭 Кукловод дёрнул за ниточки.',
+  mirror: '🪞 Зеркало выбрало свою тень.'
+};
+
 // ---------- Утилиты ----------
 function makeRoomId() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -129,6 +153,7 @@ function setTimer(room, fn, ms) {
 function resetRoundState(room) {
   room.nightActions = {};
   room.nightDone = {};
+  room.nightAnnounced = {};
   room.dayVotes = {};
   room.accusedId = null;
   room.confirmVotes = {};
@@ -371,7 +396,7 @@ io.on('connection', (socket) => {
     };
 
     socket.emit('night:action_confirmed', { role: player.role, targetId, secondTargetId });
-    markNightDone(room, player);
+    markNightDone(room, player, true);
   });
 
   // Игрок без способности (или пропускающий ход) сообщает, что закончил
@@ -453,10 +478,15 @@ io.on('connection', (socket) => {
 
 // Публично сообщаем, кто уже закончил ночные дела (без раскрытия цели и роли).
 // Если закончили все живые — ночь завершается досрочно.
-function markNightDone(room, player) {
+function markNightDone(room, player, announce = false) {
   if (room.nightDone[player.id]) return;
   room.nightDone[player.id] = true;
-  sendSystemChat(room.roomId, `🌙 ${player.name} завершил(а) свои ночные дела.`);
+  // Одно анонимное сообщение на роль за ночь (без имён)
+  const phrase = NIGHT_PHRASES[player.role];
+  if (announce && phrase && !room.nightAnnounced[player.role]) {
+    room.nightAnnounced[player.role] = true;
+    sendSystemChat(room.roomId, phrase);
+  }
 
   const pending = room.players.filter(p => p.isAlive && p.connected && !room.nightDone[p.id]);
   if (pending.length === 0) {
@@ -473,6 +503,7 @@ function startNightPhase(roomId) {
   room.status = PHASES.NIGHT;
   room.nightActions = {};
   room.nightDone = {};
+  room.nightAnnounced = {};
 
   emitRoom(room);
   io.to(roomId).emit('game:phase_change', {
@@ -870,7 +901,7 @@ function executeDay(roomId, executedId) {
 
   executed.isAlive = false;
   io.to(executed.id).emit('player:you_died', { reason: 'Казнь по решению города', timeForLastWords: 0 });
-  sendSystemChat(roomId, `🔨 По решению города казнен ${executed.name}. Его роль была: ${executed.role.toUpperCase()}!`);
+  sendSystemChat(roomId, `🔨 По решению города казнен ${executed.name}. Его роль была: ${roleRu(executed.role)}!`);
 
   if (executed.role === 'cultist') {
     room.players.forEach(p => { p.isCultMember = false; });
@@ -922,7 +953,7 @@ function executeKamikazeRevenge(roomId, targetId) {
   const victim = room.players.find(p => p.id === targetId && p.isAlive);
   if (victim) {
     victim.isAlive = false;
-    sendSystemChat(roomId, `💥 КАМИКАДЗЕ подорвал вместе с собой игрока ${victim.name} (роль: ${victim.role.toUpperCase()})!`);
+    sendSystemChat(roomId, `💥 КАМИКАДЗЕ подорвал вместе с собой игрока ${victim.name} (роль: ${roleRu(victim.role)})!`);
     io.to(victim.id).emit('player:you_died', { reason: 'Взрыв Камикадзе на дневном голосовании', timeForLastWords: 0 });
     if (victim.role === 'cultist') {
       room.players.forEach(p => { p.isCultMember = false; });
