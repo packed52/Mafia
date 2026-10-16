@@ -4,20 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Мафия Online — Расширенное Издание</title>
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel для JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Socket.io -->
   <script src="/socket.io/socket.io.js"></script>
-  <script src="https://unpkg.com/framer-motion@11.1.7/dist/framer-motion.js"></script>
 
   <style>
     .perspective-1000 { perspective: 1000px; }
-    .preserve-3d { transform-style: preserve-3d; }
-    .backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
-    .rotateY-180 { transform: rotateY(180deg); }
+    .preserve-3d {
+      transform-style: preserve-3d;
+      -webkit-transform-style: preserve-3d;
+      transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .backface-hidden {
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+    }
+    .rotateY-180 {
+      transform: rotateY(180deg);
+    }
 
-    /* Анимация стекающих капель крови и тряски экрана при смерти */
     @keyframes bloodDrip {
       0% { transform: translateY(-100%) scaleY(0.8); opacity: 0.9; }
       70% { opacity: 0.95; }
@@ -31,8 +42,15 @@
       60% { transform: translate(6px, -4px) rotate(0.5deg); }
       75% { transform: translate(-4px, 2px) rotate(0deg); }
     }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
     .animate-shake {
       animation: screenShake 0.65s cubic-bezier(.36,.07,.19,.97) both;
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.25s ease-out forwards;
     }
     .blood-drop {
       position: fixed;
@@ -46,7 +64,7 @@
       animation: bloodDrip linear infinite;
     }
     .blood-vignette {
-      background: radial-gradient(circle, rgba(0,0,0,0.4) 30%, rgba(127,29,29,0.85) 100%);
+      background: radial-gradient(circle, rgba(0,0,0,0.45) 30%, rgba(127,29,29,0.9) 100%);
     }
   </style>
 </head>
@@ -55,11 +73,9 @@
 
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
-    const { motion, AnimatePresence } = FramerMotion;
 
-    const socket = io();
+    const socket = typeof io !== 'undefined' ? io() : { on: () => {}, off: () => {}, emit: () => {}, id: 'offline' };
 
-    // Полная энциклопедия всех 16 ролей
     const ROLES_CATALOG = {
       civilian: {
         name: 'Мирный житель',
@@ -128,7 +144,7 @@
         factionLabel: 'Мирный город (Красные)',
         badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
         targetMode: 'DOUBLE_ALIVE',
-        description: 'Ночью выбирает двух игроков и проводит расследование. Ведущий сообщает, принадлежат ли они к ОДНОЙ фракции или к РАЗНЫМ, без раскрытия конкретных ролей. Мафия и нейтралы всегда дают ответ «Разные фракции».',
+        description: 'Ночью выбирает двух игроков и проводит расследование. Ведущий сообщает, принадлежат ли они к ОДНОЙ фракции или к РАЗНЫМ, без раскрытия конкретных ролей.',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       kamikaze: {
@@ -168,7 +184,7 @@
         factionLabel: 'Синдикат Мафии (Черные)',
         badgeClass: 'bg-red-950/80 text-red-300 border-red-700/50',
         targetMode: 'SINGLE_ALIVE',
-        description: 'Один раз за всю партию ночью «подбрасывает улики» против выбранного мирного жителя. Если в эту ночь Комиссар или Журналист проверяют этого игрока, система выдает ему «Черный» (мафиозный) статус.',
+        description: 'Один раз за всю партию ночью «подбрасывает улики» против выбранного мирного жителя. Если в эту ночь Комиссар или Журналист проверяют этого игрока, система выдает ему «Черный» статус.',
         winCondition: 'Побеждает вместе с синдикатом Мафии.'
       },
       suicider: {
@@ -178,7 +194,7 @@
         factionLabel: 'Нейтрал-одиночка',
         badgeClass: 'bg-purple-950/80 text-purple-300 border-purple-700/50',
         targetMode: 'NONE',
-        description: 'Не имеет ночных ходов. Должен вести себя максимально подозрительно днем и провоцировать город, чтобы добиться собственной казни на дневном голосовании. Если его убивают ночью — он проигрывает.',
+        description: 'Не имеет ночных ходов. Должен вести себя максимально подозрительно днем и провоцировать город, чтобы добиться собственной казни на дневном голосовании.',
         winCondition: 'Мгновенная сольная победа (игра останавливается), если город казнит его днем!'
       },
       necromancer: {
@@ -198,7 +214,7 @@
         factionLabel: 'Тайный Культ Секты',
         badgeClass: 'bg-fuchsia-950/80 text-fuchsia-300 border-fuchsia-700/50',
         targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь вербует одного живого игрока в свой культ. Завербованные узнают друг друга, но сохраняют свои базовые роли. Если Сектанта убивают — весь культ мгновенно распадается.',
+        description: 'Каждую ночь вербует одного живого игрока в свой культ. Завербованные узнают друг друга, но сохраняют свои базовые роли. Если Сектанта убивают — культ распадается.',
         winCondition: 'Побеждает, когда все выжившие за столом игроки состоят в секте.'
       },
       puppeteer: {
@@ -208,7 +224,7 @@
         factionLabel: 'Нейтрал / Манипулятор',
         badgeClass: 'bg-indigo-950/80 text-indigo-300 border-indigo-700/50',
         targetMode: 'DOUBLE_ALIVE',
-        description: 'Ночью выбирает двух живых игроков: Марионетку (Цель 1) и Новую мишень (Цель 2). Если первый игрок использует активное действие ночью, Кукловод принудительно перенаправляет его на второго.',
+        description: 'Ночью выбирает двух живых игроков: Марионетку (Цель 1) и Новую мишень (Цель 2). Если первый игрок использует активное действие ночью, Кукловод перенаправляет его на второго.',
         winCondition: 'Выжить и манипулировать столом.'
       },
       mirror: {
@@ -218,7 +234,7 @@
         factionLabel: 'Нейтрал-трансформер',
         badgeClass: 'bg-cyan-950/80 text-cyan-300 border-cyan-700/50',
         targetMode: 'FIRST_NIGHT_ONLY',
-        description: 'В первую ночь выбирает игрока-донора. До его гибели считается обычным мирным жителем. Как только донор погибает, Зеркало полностью копирует его роль и переходит в его фракцию.',
+        description: 'В первую ночь выбирает игрока-донора. До его гибели считается обычным мирным жителем. Как только донор погибает, Зеркало полностью копирует его роль и фракцию.',
         winCondition: 'Побеждает с той фракцией, чью роль скопировало.'
       }
     };
@@ -268,13 +284,11 @@
       } catch (e) {}
     }
 
-    // Многослойный пугающий аудиоэффект при смерти (Удары сердца + Крик ужаса + Шепот + Колокол)
     function playHorrorDeathSound() {
       try {
         const ctx = getAudioContext();
         const now = ctx.currentTime;
 
-        // 1. Тяжелые удары сердца (2 глухих толчка)
         [0, 0.28, 0.85, 1.12].forEach((offset, idx) => {
           const heartOsc = ctx.createOscillator();
           const heartGain = ctx.createGain();
@@ -289,7 +303,6 @@
           heartOsc.stop(now + offset + 0.23);
         });
 
-        // 2. Резкий диссонансный крик ужаса / скример (Sawtooth глиссандо с фильтром)
         [580, 615, 890].forEach(freq => {
           const screamOsc = ctx.createOscillator();
           const screamFilter = ctx.createBiquadFilter();
@@ -315,33 +328,6 @@
           screamOsc.stop(now + 2.4);
         });
 
-        // 3. Зловещий потусторонний шепот (Белый шум через полосовой фильтр)
-        const bufferSize = ctx.sampleRate * 2.5;
-        const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          output[i] = Math.random() * 2 - 1;
-        }
-        const whiteNoise = ctx.createBufferSource();
-        whiteNoise.buffer = noiseBuffer;
-        const whisperFilter = ctx.createBiquadFilter();
-        whisperFilter.type = 'bandpass';
-        whisperFilter.frequency.setValueAtTime(900, now);
-        whisperFilter.frequency.linearRampToValueAtTime(1800, now + 1.2);
-        whisperFilter.frequency.linearRampToValueAtTime(600, now + 2.5);
-        whisperFilter.Q.setValueAtTime(3.5, now);
-
-        const whisperGain = ctx.createGain();
-        whisperGain.gain.setValueAtTime(0.01, now);
-        whisperGain.gain.linearRampToValueAtTime(0.18, now + 0.5);
-        whisperGain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
-
-        whiteNoise.connect(whisperFilter);
-        whisperFilter.connect(whisperGain);
-        whisperGain.connect(ctx.destination);
-        whiteNoise.start(now);
-
-        // 4. Похоронный колокол (низкий металлический удар)
         const bellOsc = ctx.createOscillator();
         const bellGain = ctx.createGain();
         bellOsc.type = 'triangle';
@@ -357,18 +343,15 @@
 
     // ==================== ГЛАВНЫЙ КОМПОНЕНТ ПРИЛОЖЕНИЯ ====================
     function App() {
-      const [screen, setScreen] = useState('JOIN'); // JOIN, LOBBY, REVEAL, GAME
+      const [screen, setScreen] = useState('JOIN');
       const [playerName, setPlayerName] = useState('');
       const [roomIdInput, setRoomIdInput] = useState('');
       const [roomData, setRoomData] = useState(null);
       const [myRole, setMyRole] = useState(null);
       const [isCardFlipped, setIsCardFlipped] = useState(false);
 
-      // Модальное окно справочника роли и карманной карты
       const [inspectedRoleKey, setInspectedRoleKey] = useState(null);
-      const [showPocketModal, setShowPocketModal] = useState(false);
 
-      // Чаты и уведомления
       const [globalMessages, setGlobalMessages] = useState([]);
       const [mafiaMessages, setMafiaMessages] = useState([]);
       const [personalAlerts, setPersonalAlerts] = useState([]);
@@ -378,14 +361,12 @@
       const [globalInput, setGlobalInput] = useState('');
       const [mafiaInput, setMafiaInput] = useState('');
 
-      // Ночные и дневные выборы
       const [primaryTarget, setPrimaryTarget] = useState(null);
       const [secondaryTarget, setSecondaryTarget] = useState(null);
       const [actionConfirmed, setActionConfirmed] = useState(false);
       const [phaseInfo, setPhaseInfo] = useState({ status: 'LOBBY', round: 1, timeLeft: 0, message: '' });
       const [timerLeft, setTimerLeft] = useState(0);
 
-      // Эффект смерти и предсмертное сообщение
       const [deathOverlay, setDeathOverlay] = useState({ active: false, reason: '', canWriteLastWords: false, submitted: false });
       const [lastWordsText, setLastWordsText] = useState('');
 
@@ -403,7 +384,7 @@
         socket.on('game:started', (room) => {
           setRoomData(room);
           const me = room.players.find(p => p.id === socket.id);
-          setMyRole(me.role);
+          if (me) setMyRole(me.role);
           setIsCardFlipped(false);
           setDeathOverlay({ active: false, reason: '', canWriteLastWords: false, submitted: false });
           setScreen('REVEAL');
@@ -476,7 +457,6 @@
         };
       }, []);
 
-      // Локальный тикер таймера
       useEffect(() => {
         if (timerLeft <= 0) return;
         const interval = setInterval(() => {
@@ -493,11 +473,10 @@
       const isAlive = me ? me.isAlive : true;
       const myRoleInfo = myRole ? ROLES_CATALOG[myRole] : null;
 
-      // Создание и вход в комнату
       const createRoom = () => {
         if (!playerName.trim()) return alert('Введите ваш никнейм!');
         socket.emit('room:create', { playerName: playerName.trim() }, (res) => {
-          if (res.success) {
+          if (res && res.success) {
             setRoomData(res.room);
             setRoomIdInput(res.roomId);
             setScreen('LOBBY');
@@ -508,16 +487,15 @@
       const joinRoom = () => {
         if (!playerName.trim() || !roomIdInput.trim()) return alert('Укажите никнейм и код комнаты!');
         socket.emit('room:join', { roomId: roomIdInput.trim(), playerName: playerName.trim() }, (res) => {
-          if (res.success) {
+          if (res && res.success) {
             setRoomData(res.room);
             setScreen('LOBBY');
           } else {
-            alert(res.message);
+            alert(res?.message || 'Ошибка входа');
           }
         });
       };
 
-      // Изменение количества ролей в колоде хостом
       const updateDeckCount = (roleKey, delta) => {
         if (!roomData || roomData.hostId !== socket.id) return;
         const current = roomData.settings.deck[roleKey] || 0;
@@ -537,7 +515,7 @@
           playCardFlipSound();
           setIsCardFlipped(true);
           socket.emit('player:reveal_card', { roomId: roomData.roomId });
-          setTimeout(() => setScreen('GAME'), 3200);
+          setTimeout(() => setScreen('GAME'), 3000);
         }
       };
 
@@ -579,7 +557,6 @@
         socket.emit('kamikaze:shoot', { roomId: roomData.roomId, targetId: victimId });
       };
 
-      // Вычисляем список задействованных ролей в текущей партии для интерактивной панели
       const activeRolesInMatch = roomData?.settings?.deck
         ? Object.entries(roomData.settings.deck).filter(([_, count]) => count > 0)
         : [];
@@ -589,141 +566,121 @@
       return (
         <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 md:p-6 ${deathOverlay.active ? 'animate-shake' : ''}`}>
 
-          {/* ==================== КИНЕМАТОГРАФИЧНЫЙ ЭКРАН СМЕРТИ И КАПЛИ КРОВИ ==================== */}
-          <AnimatePresence>
-            {deathOverlay.active && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 blood-vignette flex flex-col items-center justify-center p-4 backdrop-blur-sm"
-              >
-                {/* Стекающие капли крови по краям и верху экрана */}
-                {[4, 12, 21, 33, 46, 58, 71, 83, 91, 96].map((leftPos, idx) => (
-                  <div
-                    key={idx}
-                    className="blood-drop"
-                    style={{
-                      left: `${leftPos}%`,
-                      height: `${70 + (idx % 3) * 45}px`,
-                      animationDuration: `${2.4 + (idx % 4) * 0.7}s`,
-                      animationDelay: `${(idx % 3) * 0.3}s`
-                    }}
-                  />
-                ))}
+          {/* ЭКРАН СМЕРТИ И КАПЛИ КРОВИ */}
+          {deathOverlay.active && (
+            <div className="fixed inset-0 z-50 blood-vignette flex flex-col items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
+              {[4, 12, 21, 33, 46, 58, 71, 83, 91, 96].map((leftPos, idx) => (
+                <div
+                  key={idx}
+                  className="blood-drop"
+                  style={{
+                    left: `${leftPos}%`,
+                    height: `${70 + (idx % 3) * 45}px`,
+                    animationDuration: `${2.4 + (idx % 4) * 0.7}s`,
+                    animationDelay: `${(idx % 3) * 0.3}s`
+                  }}
+                />
+              ))}
 
-                <motion.div
-                  initial={{ scale: 0.75, y: 20 }}
-                  animate={{ scale: 1, y: 0 }}
-                  className="max-w-lg w-full bg-zinc-950/95 border-2 border-red-700 rounded-2xl p-6 md:p-8 shadow-[0_0_80px_rgba(220,38,38,0.65)] text-center space-y-5 relative z-10"
-                >
-                  <div className="text-red-500 text-5xl animate-pulse">🩸</div>
-                  <h2 className="text-4xl md:text-5xl font-black tracking-widest text-red-600 drop-shadow-[0_2px_10px_rgba(220,38,38,0.8)]">
-                    ВЫ УБИТЫ
-                  </h2>
-                  <p className="text-sm text-red-300/80 uppercase tracking-wider font-semibold">
-                    Причина гибели: {deathOverlay.reason}
-                  </p>
+              <div className="max-w-lg w-full bg-zinc-950/95 border-2 border-red-700 rounded-2xl p-6 md:p-8 shadow-[0_0_80px_rgba(220,38,38,0.65)] text-center space-y-5 relative z-10">
+                <div className="text-red-500 text-5xl animate-pulse">🩸</div>
+                <h2 className="text-4xl md:text-5xl font-black tracking-widest text-red-600 drop-shadow-[0_2px_10px_rgba(220,38,38,0.8)]">
+                  ВЫ УБИТЫ
+                </h2>
+                <p className="text-sm text-red-300/80 uppercase tracking-wider font-semibold">
+                  Причина гибели: {deathOverlay.reason}
+                </p>
 
-                  {deathOverlay.canWriteLastWords && !deathOverlay.submitted ? (
-                    <form onSubmit={submitLastWords} className="space-y-4 pt-2 text-left">
-                      <label className="block text-xs uppercase tracking-wider text-amber-400 font-bold">
-                        ✍️ Предсмертное сообщение городу (осталось {timerLeft} сек):
-                      </label>
-                      <textarea
-                        rows="3"
-                        maxLength="220"
-                        placeholder="Оставьте улики, результаты проверок или последнее проклятие..."
-                        value={lastWordsText}
-                        onChange={(e) => setLastWordsText(e.target.value)}
-                        className="w-full bg-slate-900 border border-red-800/80 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-red-500"
-                      />
-                      <button
-                        type="submit"
-                        className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-lg transition"
-                      >
-                        Опубликовать предсмертную записку в чат
-                      </button>
-                    </form>
-                  ) : (
-                    <p className="text-xs text-slate-400 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                      {deathOverlay.submitted
-                        ? 'Ваше последнее слово отправлено в общий чат. Теперь вы безмолвный дух.'
-                        : 'Вы перешли в режим безмолвного Призрака и можете наблюдать за развязкой партии.'}
-                    </p>
-                  )}
-
-                  <button
-                    onClick={() => setDeathOverlay(prev => ({ ...prev, active: false }))}
-                    className="text-xs text-slate-400 hover:text-white underline pt-2"
-                  >
-                    Скрыть багровый экран и наблюдать за столом
-                  </button>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ==================== МОДАЛЬНОЕ ОКНО ОПИСАНИЯ РОЛИ ==================== */}
-          <AnimatePresence>
-            {inspectedRoleKey && ROLES_CATALOG[inspectedRoleKey] && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setInspectedRoleKey(null)}
-                className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-              >
-                <motion.div
-                  initial={{ scale: 0.9, y: 10 }}
-                  animate={{ scale: 1, y: 0 }}
-                  exit={{ scale: 0.9, y: 10 }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="max-w-md w-full bg-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-4"
-                >
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <div className="flex items-center gap-3">
-                      <span className="text-4xl">{ROLES_CATALOG[inspectedRoleKey].icon}</span>
-                      <div>
-                        <h3 className="text-xl font-bold text-white">{ROLES_CATALOG[inspectedRoleKey].name}</h3>
-                        <span className={`inline-block text-xs px-2.5 py-0.5 rounded-full border mt-1 ${ROLES_CATALOG[inspectedRoleKey].badgeClass}`}>
-                          {ROLES_CATALOG[inspectedRoleKey].factionLabel}
-                        </span>
-                      </div>
-                    </div>
+                {deathOverlay.canWriteLastWords && !deathOverlay.submitted ? (
+                  <form onSubmit={submitLastWords} className="space-y-4 pt-2 text-left">
+                    <label className="block text-xs uppercase tracking-wider text-amber-400 font-bold">
+                      ✍️ Предсмертное сообщение городу (осталось {timerLeft} сек):
+                    </label>
+                    <textarea
+                      rows="3"
+                      maxLength="220"
+                      placeholder="Оставьте улики, результаты проверок или последнее слово..."
+                      value={lastWordsText}
+                      onChange={(e) => setLastWordsText(e.target.value)}
+                      className="w-full bg-slate-900 border border-red-800/80 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-red-500"
+                    />
                     <button
-                      onClick={() => setInspectedRoleKey(null)}
-                      className="text-slate-400 hover:text-white text-xl font-bold px-2"
+                      type="submit"
+                      className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-lg transition"
                     >
-                      ✕
+                      Опубликовать предсмертную записку в чат
                     </button>
-                  </div>
+                  </form>
+                ) : (
+                  <p className="text-xs text-slate-400 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                    {deathOverlay.submitted
+                      ? 'Ваше последнее слово отправлено в общий чат. Теперь вы безмолвный дух.'
+                      : 'Вы перешли в режим безмолвного Призрака и можете наблюдать за развязкой партии.'}
+                  </p>
+                )}
 
-                  <div className="space-y-3 text-sm leading-relaxed">
-                    <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
-                      <div className="text-xs uppercase tracking-wider text-amber-400 font-bold mb-1">Способность и механика:</div>
-                      <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].description}</p>
-                    </div>
-                    <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
-                      <div className="text-xs uppercase tracking-wider text-emerald-400 font-bold mb-1">Условие победы:</div>
-                      <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].winCondition}</p>
+                <button
+                  onClick={() => setDeathOverlay(prev => ({ ...prev, active: false }))}
+                  className="text-xs text-slate-400 hover:text-white underline pt-2"
+                >
+                  Скрыть багровый экран и наблюдать за столом
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* МОДАЛЬНОЕ ОКНО СПРАВОЧНИКА РОЛИ */}
+          {inspectedRoleKey && ROLES_CATALOG[inspectedRoleKey] && (
+            <div
+              onClick={() => setInspectedRoleKey(null)}
+              className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="max-w-md w-full bg-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-4"
+              >
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-4xl">{ROLES_CATALOG[inspectedRoleKey].icon}</span>
+                    <div>
+                      <h3 className="text-xl font-bold text-white">{ROLES_CATALOG[inspectedRoleKey].name}</h3>
+                      <span className={`inline-block text-xs px-2.5 py-0.5 rounded-full border mt-1 ${ROLES_CATALOG[inspectedRoleKey].badgeClass}`}>
+                        {ROLES_CATALOG[inspectedRoleKey].factionLabel}
+                      </span>
                     </div>
                   </div>
-
                   <button
                     onClick={() => setInspectedRoleKey(null)}
-                    className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl transition"
+                    className="text-slate-400 hover:text-white text-xl font-bold px-2"
                   >
-                    Понятно
+                    ✕
                   </button>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                </div>
 
-          {/* ==================== ЭКРАН 1: ВХОД И СОЗДАНИЕ КОМНАТЫ ==================== */}
+                <div className="space-y-3 text-sm leading-relaxed">
+                  <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
+                    <div className="text-xs uppercase tracking-wider text-amber-400 font-bold mb-1">Способность и механика:</div>
+                    <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].description}</p>
+                  </div>
+                  <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
+                    <div className="text-xs uppercase tracking-wider text-emerald-400 font-bold mb-1">Условие победы:</div>
+                    <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].winCondition}</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setInspectedRoleKey(null)}
+                  className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl transition"
+                >
+                  Понятно
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ЭКРАН 1: ВХОД */}
           {screen === 'JOIN' && (
-            <div className="my-auto max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
+            <div className="my-auto max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6 animate-fade-in">
               <div className="text-center space-y-1">
                 <span className="text-xs uppercase tracking-widest px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
                   Extended Edition • 16 Ролей
@@ -768,10 +725,9 @@
             </div>
           )}
 
-          {/* ==================== ЭКРАН 2: ЛОББИ И КАСТОМИЗАЦИЯ РОЛЕЙ ==================== */}
+          {/* ЭКРАН 2: ЛОББИ */}
           {screen === 'LOBBY' && roomData && (
-            <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-3 gap-6 my-auto">
-              {/* Левая панель: Код комнаты и список подключенных игроков */}
+            <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-3 gap-6 my-auto animate-fade-in">
               <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5 flex flex-col justify-between">
                 <div className="space-y-4">
                   <div className="flex justify-between items-center border-b border-slate-800 pb-4">
@@ -814,7 +770,6 @@
                 )}
               </div>
 
-              {/* Правая панель: Конструктор колоды ролей с интерактивным кликом */}
               <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
                 <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
                   <div>
@@ -881,25 +836,211 @@
             </div>
           )}
 
-          {/* ==================== ЭКРАН 3: 3D-ВСКРЫТИЕ КАРТОЧКИ РОЛИ ==================== */}
+          {/* ЭКРАН 3: 3D-ВСКРЫТИЕ КАРТОЧКИ РОЛИ НА ЧИСТОМ CSS */}
           {screen === 'REVEAL' && myRoleInfo && (
-            <div className="my-auto flex flex-col items-center justify-center space-y-6">
+            <div className="my-auto flex flex-col items-center justify-center space-y-6 animate-fade-in">
               <h2 className="text-2xl font-bold tracking-wide text-amber-400">Ваша секретная карта роли</h2>
               <div className="perspective-1000 w-72 h-96 cursor-pointer" onClick={revealCard}>
-                <motion.div
+                <div
                   className="w-full h-full relative preserve-3d rounded-2xl shadow-2xl"
-                  animate={{ rotateY: isCardFlipped ? 180 : 0 }}
-                  transition={{ duration: 0.75, type: 'spring', stiffness: 140 }}
+                  style={{ transform: isCardFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
                 >
-                  {/* Рубашка карты */}
                   <div className="absolute inset-0 w-full h-full backface-hidden bg-gradient-to-br from-slate-900 to-zinc-950 rounded-2xl flex flex-col items-center justify-center border-4 border-amber-500/40 p-6 text-center">
                     <span className="text-6xl mb-4 text-amber-500">♠</span>
                     <p className="text-amber-200 font-bold tracking-widest text-sm uppercase">Тапните по карте, чтобы вскрыть</p>
                     <p className="text-xs text-slate-500 mt-2">Игра начнется, когда все участники посмотрят свои карты</p>
                   </div>
 
-                  {/* Лицевая сторона с ролью */}
                   <div className="absolute inset-0 w-full h-full backface-hidden rotateY-180 bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-900 rounded-2xl p-6 flex flex-col items-center justify-between border-4 border-amber-500">
                     <div className="text-center">
                       <span className="text-4xl">{myRoleInfo.icon}</span>
-                      <h3 className="text-2xl font-extrabold uppercase text-white mt-2">{myRoleInfo.
+                      <h3 className="text-2xl font-extrabold uppercase text-white mt-2">{myRoleInfo.name}</h3>
+                      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full border mt-1 ${myRoleInfo.badgeClass}`}>
+                        {myRoleInfo.factionLabel}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 text-center bg-slate-900/90 p-3 rounded-xl border border-slate-800 leading-relaxed">
+                      {myRoleInfo.description}
+                    </p>
+                    <span className="text-[11px] text-amber-400">Карта убирается в ваш личный карман</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ЭКРАН 4: ОСНОВНОЙ ИГРОВОЙ СТОЛ */}
+          {screen === 'GAME' && roomData && (
+            <div className="max-w-6xl w-full space-y-4 animate-fade-in">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-sm">
+                    Раунд {phaseInfo.round || 1} • {phaseInfo.status}
+                  </div>
+                  <p className="text-sm text-slate-200 font-medium">{phaseInfo.message}</p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {timerLeft > 0 && (
+                    <div className="px-3.5 py-1.5 rounded-xl bg-slate-950 border border-slate-700 font-mono font-bold text-amber-400 text-sm">
+                      ⏱ {timerLeft} сек
+                    </div>
+                  )}
+                  {myRoleInfo && (
+                    <button
+                      onClick={() => setInspectedRoleKey(myRole)}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5 transition"
+                    >
+                      <span>{myRoleInfo.icon}</span> Моя карта: {myRoleInfo.name}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* ЗАКРЕПЛЕННАЯ ИНТЕРАКТИВНАЯ ПАНЕЛЬ РОЛЕЙ */}
+              <div className="bg-slate-900/95 border border-amber-500/30 rounded-2xl p-3.5 shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                    📌 Роли в текущей партии (нажмите на любую роль для просмотра правил):
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {activeRolesInMatch.map(([roleKey, count]) => {
+                    const info = ROLES_CATALOG[roleKey];
+                    if (!info) return null;
+                    return (
+                      <button
+                        key={roleKey}
+                        onClick={() => setInspectedRoleKey(roleKey)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 hover:scale-105 transition ${info.badgeClass}`}
+                      >
+                        <span>{info.icon}</span>
+                        <span>{info.name}</span>
+                        <span className="opacity-75 font-mono">×{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div className="space-y-4">
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+                      Игроки за столом ({roomData.players.filter(p => p.isAlive).length} живы)
+                    </h3>
+
+                    <div className="space-y-2">
+                      {roomData.players.map(p => (
+                        <div
+                          key={p.id}
+                          className={`p-3 rounded-xl border flex justify-between items-center transition ${
+                            p.isAlive
+                              ? 'bg-slate-950 border-slate-800'
+                              : 'bg-red-950/20 border-red-900/40 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm">{p.name}</span>
+                            {p.id === socket.id && <span className="text-[11px] text-amber-400">(Вы)</span>}
+                            {cultMembers.includes(p.name) && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-fuchsia-950 text-fuchsia-300 border border-fuchsia-700/50">
+                                🕯️ Секта
+                              </span>
+                            )}
+                            {mafiaTeam.some(m => m.id === p.id) && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-950 text-red-300 border border-red-700/50">
+                                🦹‍♂️ Мафия
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-xs font-bold ${p.isAlive ? 'text-emerald-400' : 'text-red-500'}`}>
+                            {p.isAlive ? 'Жив' : '💀 Мертв'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {personalAlerts.length > 0 && (
+                    <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400">Секретные сводки для вас:</h4>
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                        {personalAlerts.map(a => (
+                          <div key={a.id} className="text-xs bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-amber-200">
+                            {a.text}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="lg:col-span-2 space-y-5">
+                  {phaseInfo.status === 'KAMIKAZE_REVENGE' && roomData.kamikazeActorId === socket.id && (
+                    <div className="bg-orange-950/40 border-2 border-orange-500 rounded-2xl p-5 space-y-4 animate-pulse">
+                      <h3 className="text-lg font-extrabold text-orange-400">
+                        💣 ПОСЛЕДНЕЕ СЛОВО КАМИКАДЗЕ: Выберите, кого забрать с собой!
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {roomData.players.filter(p => p.isAlive).map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => submitKamikazeShot(p.id)}
+                            className="p-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-slate-950 font-bold text-sm transition"
+                          >
+                            💥 Взорвать {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {phaseInfo.status === 'VOTING' && isAlive && (
+                    <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-5 space-y-3">
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-amber-400">
+                        ⚖️ Дневное голосование (выберите подозреваемого на казнь):
+                      </h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {roomData.players.filter(p => p.isAlive).map(p => (
+                          <button
+                            key={p.id}
+                            onClick={() => submitDayVote(p.id)}
+                            className={`p-3 rounded-xl border text-sm font-semibold transition ${
+                              primaryTarget === p.id
+                                ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {phaseInfo.status === 'NIGHT' && isAlive && myRoleInfo && myRoleInfo.targetMode !== 'NONE' && (
+                    <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-5 space-y-4">
+                      <div className="flex justify-between items-center">
+                        <h3 className="text-sm font-bold uppercase tracking-wider text-indigo-300">
+                          🌙 Ночной ход вашей роли: {myRoleInfo.icon} {myRoleInfo.name}
+                        </h3>
+                        {actionConfirmed && (
+                          <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700/50">
+                            ✓ Выбор принят
+                          </span>
+                        )}
+                      </div>
+
+                      {myRole === 'mirror' && phaseInfo.round > 1 ? (
+                        <p className="text-xs text-slate-400">
+                          Вы уже выбрали донора в первую ночь. Ожидайте его судьбы.
+                        </p>
+                      ) : (
+                        <>
+                          <div className="space-y-2">
+                            <span className="text-xs text-slate-400 font-semibold">
+                              {myRole === 'necromancer'
+                                ? '1. Выберите погибшего игрока, чью способность хотите воскресить:'
+                                : myRole === 'puppeteer'
+                                ? '1. Выберите Марионетку (и
