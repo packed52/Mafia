@@ -3,286 +3,220 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Мафия Online — Карточная игра</title>
+  <title>Мафия Extended — Карточная игра</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
   <style>
-    body {
-      background-color: #090d16;
-      color: #f1f5f9;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    }
-    .perspective-1000 {
-      perspective: 1000px;
-    }
-    .card-inner {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      transition: transform 0.75s cubic-bezier(0.4, 0.2, 0.2, 1);
-      transform-style: preserve-3d;
-    }
-    .card-inner.is-flipped {
-      transform: rotateY(180deg);
-    }
-    .card-face {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      backface-visibility: hidden;
-      -webkit-backface-visibility: hidden;
-      border-radius: 1rem;
-    }
-    .card-back {
-      transform: rotateY(180deg);
-    }
+    body { background-color: #07090f; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; }
+    .perspective-1000 { perspective: 1000px; }
+    .card-inner { position: relative; width: 100%; height: 100%; transition: transform 0.75s; transform-style: preserve-3d; }
+    .card-inner.is-flipped { transform: rotateY(180deg); }
+    .card-face { position: absolute; inset: 0; width: 100%; height: 100%; backface-visibility: hidden; border-radius: 1rem; }
+    .card-back { transform: rotateY(180deg); }
+    @keyframes drip { 0% { transform: translateY(-100%); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateY(100vh); opacity: 0.8; } }
+    .blood-drip { position: absolute; top: 0; width: 6px; background: linear-gradient(to bottom, #7f1d1d, #991b1b, #ef4444); animation: drip 2.5s infinite linear; border-radius: 50%; }
   </style>
 </head>
-<body class="min-h-screen flex flex-col justify-between p-3 md:p-6">
+<body class="min-h-screen flex flex-col justify-between p-3 md:p-6 relative overflow-x-hidden">
 
-  <!-- Шапка с кнопкой «Карман» (посмотреть свою карту) -->
-  <header class="max-w-5xl w-full mx-auto flex items-center justify-between py-2 px-4 bg-slate-900/90 border border-slate-800 rounded-2xl mb-4 shadow-lg">
+  <!-- КИНЕМАТОГРАФИЧЕСКИЙ ЭКРАН СМЕРТИ -->
+  <div id="deathScreenOverlay" class="hidden fixed inset-0 bg-black/95 z-50 flex flex-col items-center justify-center p-6 text-center space-y-6">
+    <div id="bloodContainer" class="absolute inset-0 pointer-events-none overflow-hidden"></div>
+    <div class="relative z-10 space-y-3">
+      <h1 class="text-5xl md:text-7xl font-black tracking-widest text-red-600 animate-pulse">ВЫ УБИТЫ</h1>
+      <p class="text-sm md:text-base text-red-300">Ваша жизнь в этой партии оборвалась...</p>
+    </div>
+    <div class="relative z-10 max-w-lg w-full bg-slate-900 border border-red-900/60 p-6 rounded-2xl space-y-4 shadow-2xl">
+      <h3 class="font-bold text-amber-400 text-sm">📜 Последнее слово города</h3>
+      <p class="text-xs text-slate-400">Оставьте подсказку живым игрокам в чате:</p>
+      <textarea id="inputLastWords" rows="3" placeholder="Ваши последние слова..." maxlength="300"
+        class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-red-500"></textarea>
+      <button onclick="submitLastWords()" class="w-full bg-red-800 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition">
+        Опубликовать предсмертное слово
+      </button>
+    </div>
+  </div>
+
+  <!-- ШАПКА -->
+  <header class="max-w-5xl w-full mx-auto flex items-center justify-between py-2 px-4 bg-slate-900/90 border border-slate-800 rounded-2xl mb-4 shadow-lg z-10">
     <div class="flex items-center gap-3">
-      <span class="text-2xl">🕵️‍♂️</span>
+      <span class="text-2xl">🩸</span>
       <div>
-        <h1 class="font-extrabold tracking-wider text-amber-500 text-lg leading-tight">МАФИЯ ONLINE</h1>
-        <p id="headerRoomBadge" class="text-xs text-slate-400">Оригинальные карточные правила</p>
+        <h1 class="font-extrabold tracking-wider text-amber-500 text-base md:text-lg">МАФИЯ EXTENDED</h1>
+        <p id="headerRoomBadge" class="text-xs text-slate-400">Продвинутые роли и механики</p>
       </div>
     </div>
-
     <div class="flex items-center gap-2">
-      <!-- Кнопка «Карман» появляется после раздачи ролей -->
+      <button onclick="openRoleBookModal(true)" class="bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 text-xs md:text-sm font-semibold px-3 py-2 rounded-xl transition flex items-center gap-1.5">
+        <span>📖</span> <span class="hidden sm:inline">Справочник ролей</span>
+      </button>
       <button id="pocketBtn" onclick="togglePocketModal(true)" class="hidden bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 text-xs md:text-sm font-semibold px-3 py-2 rounded-xl transition flex items-center gap-1.5">
-        <span>🃏</span> <span>Моя карта (Карман)</span>
+        <span>🃏</span> <span class="hidden sm:inline">Моя карта</span>
       </button>
     </div>
   </header>
 
-  <!-- ОСНОВНОЙ КОНТЕЙНЕР -->
-  <main class="max-w-5xl w-full mx-auto flex-1 flex flex-col items-center justify-center">
+  <main class="max-w-5xl w-full mx-auto flex-1 flex flex-col items-center justify-center z-10">
 
-    <!-- ЭКРАН 1: ВХОД И СОЗДАНИЕ КОМНАТЫ -->
+    <!-- ВХОД -->
     <section id="screenJoin" class="max-w-md w-full bg-slate-900 border border-slate-800 p-6 md:p-8 rounded-2xl shadow-2xl space-y-5">
       <div class="text-center space-y-1">
-        <h2 class="text-2xl font-bold text-white">Добро пожаловать в игру</h2>
-        <p id="inviteNotice" class="text-sm text-slate-400">Введите свой никнейм, чтобы создать стол или войти по ссылке</p>
+        <h2 class="text-2xl font-bold text-white">Вход в игру</h2>
+        <p class="text-sm text-slate-400">Введите ник и код комнаты для подключения</p>
       </div>
-
       <div class="space-y-3">
-        <div>
-          <label class="text-xs text-slate-400 uppercase font-bold">Ваш никнейм</label>
-          <input id="inputPlayerName" type="text" maxlength="18" placeholder="Например, Дон Корлеоне"
-            class="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500" />
-        </div>
-
-        <div>
-          <label class="text-xs text-slate-400 uppercase font-bold">Код комнаты (если входите к друзьям)</label>
-          <input id="inputRoomId" type="text" placeholder="Например: a1b2c3"
-            class="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-500" />
-        </div>
-
-        <button onclick="handleJoinRoom()" class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-3.5 rounded-xl transition shadow-lg">
+        <input id="inputPlayerName" type="text" maxlength="18" placeholder="Ваш никнейм"
+          class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500" />
+        <input id="inputRoomId" type="text" placeholder="Код комнаты"
+          class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-mono focus:outline-none focus:border-amber-500" />
+        <button onclick="handleJoinRoom()" class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-3.5 rounded-xl transition">
           Войти в комнату
         </button>
-
-        <div class="relative flex py-1 items-center">
-          <div class="flex-grow border-t border-slate-800"></div>
-          <span class="flex-shrink mx-3 text-slate-500 text-xs uppercase">или</span>
-          <div class="flex-grow border-t border-slate-800"></div>
-        </div>
-
         <button onclick="handleCreateRoom()" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold py-3.5 rounded-xl border border-slate-700 transition">
           Создать новую комнату (Хост)
         </button>
       </div>
     </section>
 
-    <!-- ЭКРАН 2: ЛОББИ И НАСТРОЙКА КОЛОДЫ -->
+    <!-- ЛОББИ -->
     <section id="screenLobby" class="hidden w-full grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- Список игроков и ссылка-приглашение -->
       <div class="lg:col-span-1 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
         <div class="flex justify-between items-center border-b border-slate-800 pb-3">
           <div>
-            <span class="text-xs text-amber-400 uppercase font-bold">Код комнаты</span>
+            <span class="text-xs text-amber-400 uppercase font-bold">Комната</span>
             <p id="lobbyRoomCode" class="text-2xl font-mono font-bold text-white">------</p>
           </div>
           <button onclick="copyInviteLink()" class="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold px-3 py-2 rounded-xl transition">
-            🔗 Скопировать ссылку
+            🔗 Ссылка
           </button>
         </div>
-
-        <div>
-          <div class="flex justify-between text-sm text-slate-400 mb-2">
-            <span>Подключенные игроки:</span>
-            <span id="lobbyPlayerCount" class="font-bold text-white">1</span>
-          </div>
-          <div id="lobbyPlayersList" class="space-y-2 max-h-60 overflow-y-auto"></div>
-        </div>
+        <div id="lobbyPlayersList" class="space-y-2 max-h-60 overflow-y-auto"></div>
       </div>
 
-      <!-- Настройка колоды ролей -->
-      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5">
-        <div class="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
-          <div>
-            <h3 class="text-lg font-bold text-white">Состав колоды ролей</h3>
-            <p class="text-xs text-slate-400">Сумма карт должна совпадать с числом игроков в комнате</p>
-          </div>
-          <button id="btnAutoBalance" onclick="autoBalanceDeck()" class="bg-slate-800 hover:bg-slate-700 text-xs text-amber-300 font-semibold px-3 py-2 rounded-xl border border-slate-700 transition">
-            ⚡ Автоподбор под число игроков
-          </button>
+      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
+        <h3 class="text-lg font-bold text-white">Настройка колоды ролей</h3>
+        <div id="deckControls" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto"></div>
+        <div class="flex justify-between items-center bg-slate-950 p-3 rounded-xl border border-slate-800">
+          <span class="text-sm text-slate-300">Карт / Игроков:</span>
+          <span id="deckCounterBadge" class="text-base font-bold text-amber-400">0 / 0</span>
         </div>
-
-        <div id="deckControls" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
-
-        <div class="flex items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800">
-          <span class="text-sm text-slate-300">Карт в колоде / Игроков:</span>
-          <span id="deckCounterBadge" class="text-lg font-bold text-amber-400">0 / 0</span>
-        </div>
-
         <div id="hostStartPanel">
-          <button onclick="handleStartGame()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition shadow-lg">
-            ▶ Раздать карточки и начать игру
+          <button onclick="handleStartGame()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition">
+            ▶ Раздать карты и начать
           </button>
         </div>
-        <p id="guestWaitText" class="hidden text-center text-sm text-slate-400">
-          Ожидание, пока хост комнаты настроит колоду и запустит игру...
-        </p>
+        <p id="guestWaitText" class="hidden text-center text-sm text-slate-400">Ожидание старта от хоста...</p>
       </div>
     </section>
 
-    <!-- ЭКРАН 3: РАЗДАЧА И ВСКРЫТИЕ КАРТОЧКИ РОЛИ -->
+    <!-- ВСКРЫТИЕ КАРТЫ -->
     <section id="screenReveal" class="hidden flex-col items-center justify-center space-y-6 text-center py-6">
-      <div class="space-y-1">
-        <h2 class="text-2xl font-bold text-white">Ваша закрытая карта роли</h2>
-        <p class="text-sm text-slate-400">Нажмите по карточке, чтобы перевернуть её и узнать свою роль</p>
-      </div>
-
+      <h2 class="text-2xl font-bold text-white">Ваша секретная карта</h2>
       <div class="perspective-1000 w-72 h-96 cursor-pointer select-none" onclick="handleFlipRoleCard()">
         <div id="revealCardInner" class="card-inner">
-          <!-- Рубашка карты -->
-          <div class="card-face bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-4 border-amber-500/40 shadow-2xl flex flex-col items-center justify-center p-6">
-            <div class="w-20 h-20 rounded-full border-2 border-amber-500/60 flex items-center justify-center mb-4 bg-amber-500/10">
-              <span class="text-4xl text-amber-400">♠</span>
-            </div>
-            <p class="text-amber-300 font-bold tracking-widest text-sm uppercase">МАФИЯ</p>
-            <p class="text-xs text-slate-400 mt-3">Нажмите, чтобы вскрыть карту</p>
+          <div class="card-face bg-gradient-to-br from-slate-900 to-slate-950 border-4 border-amber-500/40 shadow-2xl flex flex-col items-center justify-center p-6">
+            <span class="text-5xl text-amber-400 mb-4">♠</span>
+            <p class="text-amber-300 font-bold tracking-widest text-sm">НАЖМИТЕ, ЧТОБЫ ВСКРЫТЬ</p>
           </div>
-
-          <!-- Лицевая сторона карты (Роль) -->
-          <div class="card-face card-back bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-900 border-4 border-amber-500 shadow-2xl flex flex-col items-center justify-between p-6">
-            <span id="revealRoleTeam" class="text-xs uppercase tracking-widest font-bold px-3 py-1 rounded-full bg-amber-500/20 text-amber-300">Ваша роль</span>
-            <div class="my-auto space-y-3">
+          <div class="card-face card-back bg-slate-900 border-4 border-amber-500 shadow-2xl flex flex-col items-center justify-between p-6">
+            <span id="revealRoleTeam" class="text-xs uppercase px-3 py-1 rounded-full bg-amber-500/20 text-amber-300">Роль</span>
+            <div class="my-auto space-y-2">
               <div id="revealRoleIcon" class="text-5xl">🕵️‍♂️</div>
-              <h3 id="revealRoleTitle" class="text-2xl font-extrabold uppercase text-white">Мирный житель</h3>
-              <p id="revealRoleDesc" class="text-xs text-slate-300 leading-relaxed bg-slate-900/80 p-3 rounded-xl border border-slate-800"></p>
+              <h3 id="revealRoleTitle" class="text-2xl font-extrabold uppercase text-white">Роль</h3>
+              <p id="revealRoleDesc" class="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800"></p>
             </div>
-            <span class="text-xs text-emerald-400 font-medium">✓ Карта сохранена в ваш «Карман»</span>
+            <span class="text-xs text-emerald-400 font-medium">✓ Перенесено в карман</span>
           </div>
         </div>
       </div>
-
-      <p id="revealWaitCounter" class="text-sm text-amber-400 font-medium"></p>
     </section>
 
-    <!-- ЭКРАН 4: ИГРОВОЙ СТОЛ (НОЧЬ, ДЕНЬ, ГОЛОСОВАНИЕ, ЧАТЫ) -->
+    <!-- ИГРОВОЙ СТОЛ -->
     <section id="screenGame" class="hidden w-full grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-      <!-- Левая колонка: Таймер фазы и список игроков -->
       <div class="lg:col-span-1 space-y-4">
         <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
           <div class="flex items-center justify-between">
-            <span id="phaseBadge" class="text-xs font-extrabold uppercase tracking-wider px-3 py-1 rounded-lg bg-amber-500/20 text-amber-300">НОЧЬ</span>
-            <span id="timerDisplay" class="text-2xl font-mono font-extrabold text-white">30с</span>
+            <span id="phaseBadge" class="text-xs font-bold uppercase px-3 py-1 rounded-lg bg-amber-500/20 text-amber-300">НОЧЬ</span>
+            <span id="timerDisplay" class="text-2xl font-mono font-bold text-white">30с</span>
           </div>
-          <p id="phaseAnnouncement" class="text-sm text-slate-300 leading-relaxed"></p>
-          <button id="btnHostSkipDay" onclick="skipToVoting()" class="hidden w-full bg-slate-800 hover:bg-slate-700 text-xs text-amber-300 font-semibold py-2 rounded-xl border border-slate-700 transition">
-            ⏩ Перейти к голосованию досрочно
-          </button>
-          <button id="btnBackToLobby" onclick="resetToLobby()" class="hidden w-full bg-emerald-600 hover:bg-emerald-500 text-sm text-white font-bold py-2.5 rounded-xl transition">
-            🔄 Новая игра (В лобби)
-          </button>
+          <p id="phaseAnnouncement" class="text-sm text-slate-300"></p>
+          <button id="btnHostSkipDay" onclick="skipToVoting()" class="hidden w-full bg-slate-800 text-xs text-amber-300 py-2 rounded-xl border border-slate-700">⏩ К голосованию</button>
+          <button id="btnBackToLobby" onclick="resetToLobby()" class="hidden w-full bg-emerald-600 text-sm text-white font-bold py-2.5 rounded-xl">🔄 В лобби</button>
         </div>
 
-        <!-- Список игроков со статусами Жив/Мертв -->
         <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-          <h3 class="text-sm font-bold text-slate-300 uppercase tracking-wider">Игроки за столом</h3>
+          <h3 class="text-sm font-bold text-slate-300 uppercase">Игроки</h3>
           <div id="gamePlayersList" class="space-y-2"></div>
         </div>
       </div>
 
-      <!-- Правая колонка: Панель действий роли, голосования и чаты -->
       <div class="lg:col-span-2 space-y-4">
-
-        <!-- Баннер режима Призрака (показывается, если игрок мертв) -->
-        <div id="ghostBanner" class="hidden bg-red-950/50 border border-red-800/60 p-4 rounded-2xl text-red-200 text-sm flex items-center gap-3">
+        <div id="ghostBanner" class="hidden bg-red-950/50 border border-red-800 p-4 rounded-2xl text-red-200 text-sm flex items-center gap-3">
           <span class="text-2xl">👻</span>
-          <div>
-            <p class="font-bold text-red-300">Вы погибли (Режим призрака)</p>
-            <p class="text-xs text-red-200/80">Ввод текста в чат и голосование заблокированы. Вы можете наблюдать за игрой.</p>
-          </div>
+          <div><p class="font-bold">Вы в режиме призрака</p><p class="text-xs">Наблюдайте за ходом партии.</p></div>
         </div>
 
-        <!-- Личные уведомления (результаты проверки Комиссара, Дона, Бомжа) -->
         <div id="privateReportsBox" class="hidden bg-indigo-950/60 border border-indigo-500/50 p-4 rounded-2xl space-y-1"></div>
 
-        <!-- Панель ночных действий или дневного голосования -->
-        <div id="actionPanel" class="hidden bg-slate-900 border border-amber-500/40 p-5 rounded-2xl space-y-4">
-          <h3 id="actionPanelTitle" class="font-bold text-amber-400 text-base">Выберите цель</h3>
+        <div id="actionPanel" class="hidden bg-slate-900 border border-amber-500/40 p-5 rounded-2xl space-y-3">
+          <h3 id="actionPanelTitle" class="font-bold text-amber-400 text-sm">Ночное действие</h3>
           <div id="actionTargetsGrid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
         </div>
 
-        <!-- Закрытый ночной чат Мафии (виден только Мафии и Дону ночью) -->
+        <!-- Ночной чат мафии -->
         <div id="mafiaChatBox" class="hidden bg-slate-900 border border-red-900/60 p-5 rounded-2xl space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="font-bold text-red-400 text-sm flex items-center gap-2">🕶️ Закрытый ночной чат Мафии</h3>
-            <span class="text-xs text-red-300/70">Виден только Дону и Мафии</span>
-          </div>
-          <div id="mafiaChatMessages" class="h-36 bg-slate-950 p-3 rounded-xl overflow-y-auto space-y-1.5 border border-slate-800 text-sm"></div>
-          <div id="mafiaChatInputRow" class="flex gap-2">
-            <input id="inputMafiaChat" type="text" placeholder="Координация выстрела..."
-              onkeydown="if(event.key==='Enter') sendMafiaChat()"
+          <h3 class="font-bold text-red-400 text-sm">🕶️ Ночной чат Мафии</h3>
+          <div id="mafiaChatMessages" class="h-32 bg-slate-950 p-3 rounded-xl overflow-y-auto space-y-1 border border-slate-800 text-sm"></div>
+          <div class="flex gap-2">
+            <input id="inputMafiaChat" type="text" placeholder="Сообщение мафии..." onkeydown="if(event.key==='Enter') sendMafiaChat()"
               class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-red-500" />
-            <button onclick="sendMafiaChat()" class="bg-red-800 hover:bg-red-700 text-white text-sm font-bold px-4 py-2 rounded-xl transition">
-              Отправить
-            </button>
+            <button onclick="sendMafiaChat()" class="bg-red-800 text-white text-sm font-bold px-4 py-2 rounded-xl">Отправить</button>
           </div>
         </div>
 
-        <!-- Общий игровой чат -->
+        <!-- ИНТЕРАКТИВНЫЙ СПРАВОЧНИК РОЛЕЙ (Над общим чатом в виде удобной панели) -->
+        <div class="bg-slate-900 border border-indigo-500/40 p-4 rounded-2xl space-y-2">
+          <div class="flex justify-between items-center">
+            <h3 class="text-xs font-bold uppercase text-indigo-400 tracking-wider">📜 Роли в этой партии (Нажмите для справки)</h3>
+            <span class="text-[10px] text-slate-400">Кликните на роль</span>
+          </div>
+          <div id="activeRolesBar" class="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto"></div>
+        </div>
+
+        <!-- Общий чат -->
         <div class="bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="font-bold text-slate-200 text-sm">💬 Общий чат стола</h3>
-            <span id="globalChatStatus" class="text-xs text-emerald-400">Открыт для живых</span>
-          </div>
-          <div id="globalChatMessages" class="h-52 bg-slate-950 p-3 rounded-xl overflow-y-auto space-y-2 border border-slate-800 text-sm"></div>
-
-          <!-- Поле ввода скрывается, если наступила ночь или если игрок мертв -->
+          <h3 class="font-bold text-slate-200 text-sm">💬 Общий чат</h3>
+          <div id="globalChatMessages" class="h-44 bg-slate-950 p-3 rounded-xl overflow-y-auto space-y-2 border border-slate-800 text-sm"></div>
           <div id="globalChatInputRow" class="flex gap-2">
-            <input id="inputGlobalChat" type="text" placeholder="Напишите сообщение..."
-              onkeydown="if(event.key==='Enter') sendGlobalChat()"
-              class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500" />
-            <button onclick="sendGlobalChat()" class="bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold px-5 py-2.5 rounded-xl transition">
-              Отправить
-            </button>
+            <input id="inputGlobalChat" type="text" placeholder="Сообщение..." onkeydown="if(event.key==='Enter') sendGlobalChat()"
+              class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-amber-500" />
+            <button onclick="sendGlobalChat()" class="bg-amber-500 text-slate-950 font-bold px-5 py-2 rounded-xl">Отправить</button>
           </div>
         </div>
-
       </div>
     </section>
 
   </main>
 
-  <!-- МОДАЛЬНОЕ ОКНО «КАРМАН» (повторный просмотр своей карточки роли в любой момент) -->
+  <!-- МОДАЛЬНОЕ ОКНО «СПРАВОЧНИК РОЛЕЙ» -->
+  <div id="roleBookModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="openRoleBookModal(false)">
+    <div class="bg-slate-900 border border-indigo-500 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto" onclick="event.stopPropagation()">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+        <h3 id="modalRoleTitle" class="text-lg font-bold text-indigo-400">📖 Справочник ролей</h3>
+        <button onclick="openRoleBookModal(false)" class="text-slate-400 hover:text-white font-bold text-lg">✕</button>
+      </div>
+      <div id="roleBookContent" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНОЕ ОКНО «КАРМАН» -->
   <div id="pocketModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="togglePocketModal(false)">
     <div class="bg-slate-900 border-2 border-amber-500 rounded-2xl max-w-xs w-full p-6 text-center space-y-4 shadow-2xl" onclick="event.stopPropagation()">
-      <span class="text-xs uppercase tracking-widest text-amber-400 font-bold">Ваша карта в кармане</span>
+      <span class="text-xs uppercase tracking-widest text-amber-400 font-bold">Карман игрока</span>
       <div id="pocketRoleIcon" class="text-5xl">🕵️‍♂️</div>
       <h3 id="pocketRoleTitle" class="text-2xl font-extrabold uppercase text-white">Роль</h3>
-      <p id="pocketRoleDesc" class="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800"></p>
-      <button onclick="togglePocketModal(false)" class="w-full bg-slate-800 hover:bg-slate-700 text-white font-semibold py-2.5 rounded-xl">
-        Спрятать обратно в карман
-      </button>
+      <p id="pocketRoleDesc" class="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800"></p>
+      <button onclick="togglePocketModal(false)" class="w-full bg-slate-800 text-white py-2.5 rounded-xl">Спрятать</button>
     </div>
   </div>
 
@@ -290,194 +224,147 @@
     const socket = io();
 
     const ROLE_INFO = {
-      don: {
-        title: 'Дон Мафии',
-        team: 'Черная карта (Мафия)',
-        icon: '🎩',
-        desc: 'Глава мафии. Ночью участвует в отстреле мирных И может проверить одного игрока, чтобы узнать, является ли он Комиссаром.'
-      },
-      mafia: {
-        title: 'Мафия',
-        team: 'Черная карта (Мафия)',
-        icon: '🔫',
-        desc: 'Член мафии. Общается в закрытом ночном чате с Доном и каждую ночь выбирает жертву для устранения.'
-      },
-      commissar: {
-        title: 'Комиссар',
-        team: 'Красная карта (Мирные)',
-        icon: '🚓',
-        desc: 'Представитель закона. Каждую ночь проверяет одного игрока на принадлежность к мафии.'
-      },
-      doctor: {
-        title: 'Доктор',
-        team: 'Красная карта (Мирные)',
-        icon: '💉',
-        desc: 'Каждую ночь лечит выбранного игрока, спасая от выстрела мафии. Себя лечить два раза подряд нельзя.'
-      },
-      hooker: {
-        title: 'Любовница',
-        team: 'Красная карта (Мирные)',
-        icon: '💋',
-        desc: 'Каждую ночь блокирует способность выбранного игрока до утра.'
-      },
-      hobo: {
-        title: 'Бомж (Свидетель)',
-        team: 'Красная карта (Мирные)',
-        icon: '🍾',
-        desc: 'Каждую ночь следит за домом одного игрока и узнает, кто к нему приходил.'
-      },
-      civilian: {
-        title: 'Мирный житель',
-        team: 'Красная карта (Мирные)',
-        icon: '🏡',
-        desc: 'Честный горожанин. Ваша задача — вычислить мафию на дневном обсуждении и голосовании.'
-      }
+      don: { name: 'Дон мафии', team: 'Мафия (Черная)', icon: '🎩', desc: 'Глава мафии. Стреляет ночью и проверяет игроков на роль Комиссара.' },
+      mafia: { name: 'Мафия', team: 'Мафия (Черная)', icon: '🔫', desc: 'Участвует в ночном отстреле и закрытом ночном чате.' },
+      commissar: { name: 'Комиссар', team: 'Мирные (Красная)', icon: '🚓', desc: 'Ночью проверяет причастность игроков к мафии.' },
+      doctor: { name: 'Доктор', team: 'Мирные (Красная)', icon: '💉', desc: 'Каждую ночь лечит одного игрока от пули мафии (себя дважды подряд нельзя).' },
+      hooker: { name: 'Любовница', team: 'Мирные (Красная)', icon: '💋', desc: 'Блокирует ночную способность выбранного игрока.' },
+      hobo: { name: 'Бомж (Свидетель)', team: 'Мирные (Красная)', icon: '🍾', desc: 'Следит за домом игрока и узнает, кто к нему приходил.' },
+      lucky: { name: 'Счастливчик', team: 'Мирные (Красная)', icon: '🍀', desc: 'Пассивная удача: 50% шанс выжить при ночном нападении мафии.' },
+      kamikaze: { name: 'Камикадзе', team: 'Мирные (Красная)', icon: '💣', desc: 'Если город казнит его днем, забирает с собой выбранного игрока.' },
+      suicidal: { name: 'Самоубийца', team: 'Нейтрал (Одиночка)', icon: '🎭', desc: 'Должен спровоцировать город и добиться собственной казни днем для соло победы.' },
+      necromancer: { name: 'Некромант', team: 'Нейтрал', icon: '💀', desc: 'Воскрешает способность одного из погибших игроков на одну ночь.' },
+      cultist: { name: 'Сектант', team: 'Секта', icon: '🕯️', desc: 'Вербует игроков в культ. Побеждает, если все выжившие состоят в секте.' },
+      puppeteer: { name: 'Кукловод', team: 'Нейтрал', icon: '🕹️', desc: 'Перенаправляет ночные действия одного игрока на другого.' },
+      instigator: { name: 'Подстрекатель', team: 'Мирные', icon: '🔥', desc: 'Подбрасывает улики против игрока, искажая проверку Комиссара.' },
+      journalist: { name: 'Журналист', team: 'Мирные', icon: '📰', desc: 'Сравнивает фракции двух выбранных игроков ночью.' },
+      mirror: { name: 'Зеркало / Хамелеон', team: 'Нейтрал', icon: '🪞', desc: 'Копирует роль погибшего игрока, которому пообещал верность.' },
+      civilian: { name: 'Мирный житель', team: 'Мирные', icon: '🏡', desc: 'Участвует в дневных обсуждениях и голосовании.' }
     };
 
     let currentState = null;
     let myRoleCached = null;
 
-    // Web Audio API (синтез звука переворота карты и смены фаз без внешних файлов)
-    let audioCtx = null;
-    function getAudioCtx() {
-      if (!audioCtx) {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) audioCtx = new AudioContext();
+    function playDeathAudio() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state === 'suspended') ctx.resume();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(80, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(25, ctx.currentTime + 1.8);
+        gain.gain.setValueAtTime(0.5, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.8);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.8);
+      } catch (e) {}
+    }
+
+    function openRoleBookModal(show = true, specificRoleKey = null) {
+      const modal = document.getElementById('roleBookModal');
+      const content = document.getElementById('roleBookContent');
+      const title = document.getElementById('modalRoleTitle');
+      content.innerHTML = '';
+
+      if (show) {
+        modal.classList.remove('hidden');
+        if (specificRoleKey && ROLE_INFO[specificRoleKey]) {
+          const item = ROLE_INFO[specificRoleKey];
+          title.textContent = `${item.icon} ${item.name}`;
+          content.innerHTML = `
+            <p class="text-xs text-indigo-300 font-semibold">Фракция: ${item.team}</p>
+            <p class="text-sm text-slate-200 bg-slate-950 p-4 rounded-xl border border-slate-800 leading-relaxed">${item.desc}</p>
+          `;
+        } else {
+          title.textContent = '📖 Справочник ролей партии';
+          Object.keys(ROLE_INFO).forEach(key => {
+            const item = ROLE_INFO[key];
+            const div = document.createElement('div');
+            div.className = 'bg-slate-950 p-3 rounded-xl border border-slate-800 hover:border-indigo-500 cursor-pointer transition flex items-center gap-3';
+            div.onclick = () => openRoleBookModal(true, key);
+            div.innerHTML = `
+              <span class="text-2xl">${item.icon}</span>
+              <div>
+                <p class="font-bold text-sm text-white">${item.name}</p>
+                <p class="text-xs text-indigo-300">${item.team}</p>
+                <p class="text-xs text-slate-400 mt-0.5">${item.desc}</p>
+              </div>
+            `;
+            content.appendChild(div);
+          });
+        }
+      } else {
+        modal.classList.add('hidden');
       }
-      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-      return audioCtx;
     }
 
-    function playCardFlipSound() {
-      try {
-        const ctx = getAudioCtx();
-        if (!ctx) return;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(420, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(90, ctx.currentTime + 0.09);
-        gain.gain.setValueAtTime(0.25, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.09);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.09);
-      } catch (e) {}
+    function renderActiveRolesBar(state) {
+      const bar = document.getElementById('activeRolesBar');
+      bar.innerHTML = '';
+      const presentRoles = new Set();
+      if (state && state.settings && state.settings.deck) {
+        Object.keys(state.settings.deck).forEach(k => {
+          if (Number(state.settings.deck[k] || 0) > 0) presentRoles.add(k);
+        });
+      }
+      if (presentRoles.size === 0) {
+        bar.innerHTML = '<span class="text-xs text-slate-500">Роли не выбраны</span>';
+        return;
+      }
+      presentRoles.forEach(key => {
+        const inf = ROLE_INFO[key];
+        if (!inf) return;
+        const chip = document.createElement('button');
+        chip.className = 'bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500 text-xs px-2.5 py-1.5 rounded-lg text-slate-200 flex items-center gap-1.5 transition';
+        chip.innerHTML = `<span>${inf.icon}</span> <span>${inf.name}</span>`;
+        chip.onclick = () => openRoleBookModal(true, key);
+        bar.appendChild(chip);
+      });
     }
 
-    function playPhaseSound() {
-      try {
-        const ctx = getAudioCtx();
-        if (!ctx) return;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(160, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(75, ctx.currentTime + 0.4);
-        gain.gain.setValueAtTime(0.01, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.4);
-      } catch (e) {}
-    }
-
-    // Автоматическое чтение кода комнаты из ссылки (/room/abc123 или ?room=abc123)
     window.addEventListener('DOMContentLoaded', () => {
       const pathMatch = window.location.pathname.match(/\/room\/([a-zA-Z0-9_-]+)/);
       const urlParams = new URLSearchParams(window.location.search);
       const roomFromUrl = (pathMatch && pathMatch[1]) || urlParams.get('room');
-      if (roomFromUrl) {
-        document.getElementById('inputRoomId').value = roomFromUrl;
-        document.getElementById('inviteNotice').textContent = `Вы перешли по приглашению в комнату #${roomFromUrl}. Введите ник и нажмите «Войти»!`;
-        document.getElementById('inviteNotice').className = 'text-sm text-amber-400 font-semibold';
-      }
+      if (roomFromUrl) document.getElementById('inputRoomId').value = roomFromUrl;
     });
 
     function handleCreateRoom() {
       const playerName = document.getElementById('inputPlayerName').value.trim();
-      if (!playerName) return alert('Пожалуйста, укажите ваш никнейм!');
-      socket.emit('room:create', { playerName }, (res) => {
-        if (res && res.success) {
-          window.history.replaceState({}, '', `/room/${res.roomId}`);
-        }
+      if (!playerName) return alert('Введите никнейм!');
+      socket.emit('room:create', { playerName }, res => {
+        if (res && res.success) window.history.replaceState({}, '', `/room/${res.roomId}`);
       });
     }
 
     function handleJoinRoom() {
       const playerName = document.getElementById('inputPlayerName').value.trim();
       const roomId = document.getElementById('inputRoomId').value.trim();
-      if (!playerName) return alert('Пожалуйста, укажите ваш никнейм!');
-      if (!roomId) return alert('Введите код комнаты или нажмите «Создать новую комнату»!');
-
-      socket.emit('room:join', { roomId, playerName }, (res) => {
-        if (!res || !res.success) {
-          alert(res ? res.message : 'Ошибка подключения');
-        } else {
-          window.history.replaceState({}, '', `/room/${res.roomId}`);
-        }
+      if (!playerName || !roomId) return alert('Заполните ник и код комнаты!');
+      socket.emit('room:join', { roomId, playerName }, res => {
+        if (!res || !res.success) alert(res?.message || 'Ошибка');
+        else window.history.replaceState({}, '', `/room/${res.roomId}`);
       });
     }
 
     function copyInviteLink() {
       if (!currentState) return;
       const link = `${window.location.origin}/room/${currentState.roomId}`;
-      navigator.clipboard.writeText(link).then(() => {
-        alert(`Ссылка скопирована!\nОтправьте её друзьям:\n${link}`);
-      }).catch(() => {
-        prompt('Скопируйте ссылку для приглашения друзей:', link);
-      });
-    }
-
-    function adjustDeckRole(roleKey, delta) {
-      if (!currentState || currentState.hostId !== socket.id) return;
-      const deck = { ...currentState.settings.deck };
-      deck[roleKey] = Math.max(0, Number(deck[roleKey] || 0) + delta);
-      socket.emit('room:update_settings', { roomId: currentState.roomId, deck });
-    }
-
-    function autoBalanceDeck() {
-      if (!currentState || currentState.hostId !== socket.id) return;
-      const count = currentState.players.length;
-      const deck = { don: 1, mafia: 0, commissar: 1, doctor: 1, hooker: 0, hobo: 0, civilian: 0 };
-
-      if (count <= 3) {
-        deck.don = 1; deck.commissar = 1; deck.doctor = 0; deck.civilian = Math.max(0, count - 2);
-      } else if (count === 4) {
-        deck.don = 1; deck.commissar = 1; deck.doctor = 1; deck.civilian = 1;
-      } else if (count === 5) {
-        deck.don = 1; deck.commissar = 1; deck.doctor = 1; deck.hooker = 1; deck.civilian = 1;
-      } else if (count === 6) {
-        deck.don = 1; deck.mafia = 1; deck.commissar = 1; deck.doctor = 1; deck.hooker = 1; deck.civilian = 1;
-      } else {
-        deck.don = 1;
-        deck.mafia = Math.max(1, Math.floor(count / 4));
-        deck.commissar = 1;
-        deck.doctor = 1;
-        deck.hooker = 1;
-        deck.hobo = 1;
-        const used = deck.don + deck.mafia + deck.commissar + deck.doctor + deck.hooker + deck.hobo;
-        deck.civilian = Math.max(0, count - used);
-      }
-      socket.emit('room:update_settings', { roomId: currentState.roomId, deck });
+      navigator.clipboard.writeText(link).then(() => alert('Ссылка скопирована!'));
     }
 
     function handleStartGame() {
       if (!currentState) return;
-      socket.emit('game:start', { roomId: currentState.roomId }, (res) => {
-        if (res && !res.success) alert(res.message);
-      });
+      socket.emit('game:start', { roomId: currentState.roomId }, res => { if (res && !res.success) alert(res.message); });
     }
 
     function handleFlipRoleCard() {
-      if (!currentState) return;
-      const cardEl = document.getElementById('revealCardInner');
-      if (!cardEl.classList.contains('is-flipped')) {
-        playCardFlipSound();
-        cardEl.classList.add('is-flipped');
+      const card = document.getElementById('revealCardInner');
+      if (!card.classList.contains('is-flipped')) {
+        card.classList.add('is-flipped');
         socket.emit('player:reveal_card', { roomId: currentState.roomId });
       }
     }
@@ -485,397 +372,209 @@
     function togglePocketModal(show) {
       const modal = document.getElementById('pocketModal');
       if (show && myRoleCached && ROLE_INFO[myRoleCached]) {
-        const info = ROLE_INFO[myRoleCached];
-        document.getElementById('pocketRoleIcon').textContent = info.icon;
-        document.getElementById('pocketRoleTitle').textContent = info.title;
-        document.getElementById('pocketRoleDesc').textContent = info.desc;
+        const inf = ROLE_INFO[myRoleCached];
+        document.getElementById('pocketRoleIcon').textContent = inf.icon;
+        document.getElementById('pocketRoleTitle').textContent = inf.name;
+        document.getElementById('pocketRoleDesc').textContent = inf.desc;
         modal.classList.remove('hidden');
-      } else {
-        modal.classList.add('hidden');
-      }
+      } else modal.classList.add('hidden');
     }
 
     function sendGlobalChat() {
-      if (!currentState) return;
       const input = document.getElementById('inputGlobalChat');
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || !currentState) return;
       socket.emit('chat:global', { roomId: currentState.roomId, message: text });
       input.value = '';
     }
 
     function sendMafiaChat() {
-      if (!currentState) return;
       const input = document.getElementById('inputMafiaChat');
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || !currentState) return;
       socket.emit('chat:mafia', { roomId: currentState.roomId, message: text });
       input.value = '';
     }
 
     function submitNightAction(actionType, targetId) {
       if (!currentState) return;
-      socket.emit('night:action', { roomId: currentState.roomId, actionType, targetId }, (res) => {
-        if (res && !res.success) {
-          alert(res.message);
-        } else if (res && res.success) {
-          const panel = document.getElementById('actionPanelTitle');
-          panel.textContent = `✓ Выбор сделан (${res.targetName})`;
-        }
+      socket.emit('night:action', { roomId: currentState.roomId, actionType, targetId }, res => {
+        if (res && res.success) document.getElementById('actionPanelTitle').textContent = '✓ Выбор принят';
       });
     }
 
-    function submitDayVote(targetId) {
+    function submitLastWords() {
+      const text = document.getElementById('inputLastWords').value.trim();
       if (!currentState) return;
-      socket.emit('day:vote', { roomId: currentState.roomId, targetId });
+      socket.emit('player:last_words', { roomId: currentState.roomId, message: text });
+      document.getElementById('deathScreenOverlay').classList.add('hidden');
     }
 
-    function skipToVoting() {
-      if (!currentState) return;
-      socket.emit('host:skip_to_voting', { roomId: currentState.roomId });
-    }
+    function skipToVoting() { socket.emit('host:skip_to_voting', { roomId: currentState.roomId }); }
+    function resetToLobby() { socket.emit('game:reset_to_lobby', { roomId: currentState.roomId }); }
 
-    function resetToLobby() {
-      if (!currentState) return;
-      socket.emit('game:reset_to_lobby', { roomId: currentState.roomId });
-    }
-
-    // Обновление таймера каждую секунду
-    socket.on('timer:tick', (timeLeft) => {
-      document.getElementById('timerDisplay').textContent = `${timeLeft}с`;
+    socket.on('player:trigger_death_screen', () => {
+      playDeathAudio();
+      const overlay = document.getElementById('deathScreenOverlay');
+      overlay.classList.remove('hidden');
+      const blood = document.getElementById('bloodContainer');
+      blood.innerHTML = '';
+      for (let i = 0; i < 15; i++) {
+        const drop = document.createElement('div');
+        drop.className = 'blood-drip';
+        drop.style.left = `${Math.random() * 100}%`;
+        drop.style.animationDuration = `${1.5 + Math.random() * 2}s`;
+        drop.style.animationDelay = `${Math.random()}s`;
+        blood.appendChild(drop);
+      }
     });
 
-    // Приватные уведомления для Комиссара, Дона, Бомжа и жертвы Любовницы
+    socket.on('timer:tick', t => document.getElementById('timerDisplay').textContent = `${t}с`);
+
     socket.on('night:private_report', ({ title, text }) => {
       const box = document.getElementById('privateReportsBox');
       box.classList.remove('hidden');
-      const item = document.createElement('div');
-      item.className = 'text-xs text-indigo-200 border-b border-indigo-500/30 pb-1 last:border-none';
-      item.innerHTML = `<strong class="text-amber-300">${title}:</strong> ${text}`;
-      box.prepend(item);
+      const div = document.createElement('div');
+      div.className = 'text-xs text-indigo-200 border-b border-indigo-500/30 pb-1';
+      div.innerHTML = `<strong class="text-amber-300">${title}:</strong> ${text}`;
+      box.prepend(div);
     });
 
-    // Сообщения общего чата
-    socket.on('chat:global:message', (msg) => {
-      const container = document.getElementById('globalChatMessages');
+    socket.on('chat:global:message', msg => {
+      const box = document.getElementById('globalChatMessages');
       const div = document.createElement('div');
       if (msg.system) {
-        div.className = 'text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-lg';
-        div.textContent = `📢 ${msg.text}`;
+        div.className = 'text-xs text-amber-300 bg-amber-500/10 p-2 rounded-lg';
+        div.textContent = msg.text;
       } else {
         div.className = 'text-sm text-slate-200';
-        div.innerHTML = `<span class="text-xs text-slate-500 mr-1">[${msg.time || ''}]</span><strong class="text-amber-400">${msg.senderName}:</strong> ${msg.text}`;
+        div.innerHTML = `<strong class="text-amber-400">${msg.senderName}:</strong> ${msg.text}`;
       }
-      container.appendChild(div);
-      container.scrollTop = container.scrollHeight;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
     });
 
-    // Сообщения ночного чата мафии
-    socket.on('chat:mafia:message', (msg) => {
-      const container = document.getElementById('mafiaChatMessages');
+    socket.on('chat:mafia:message', msg => {
+      const box = document.getElementById('mafiaChatMessages');
       const div = document.createElement('div');
       div.className = 'text-xs text-red-200';
-      div.innerHTML = `<strong class="text-red-400">[${msg.role}] ${msg.senderName}:</strong> ${msg.text}`;
-      container.appendChild(div);
-      container.scrollTop = container.scrollHeight;
+      div.innerHTML = `<strong class="text-red-400">${msg.senderName}:</strong> ${msg.text}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
     });
 
-    // Главный обработчик состояния комнаты
-    socket.on('room:state', (state) => {
-      const prevStatus = currentState ? currentState.status : null;
+    socket.on('room:state', state => {
       currentState = state;
-
-      if (prevStatus && prevStatus !== state.status) {
-        playPhaseSound();
-      }
-
       const me = state.players.find(p => p.id === socket.id);
-      if (me && me.role) {
-        myRoleCached = me.role;
-      }
+      if (me && me.role) myRoleCached = me.role;
 
-      document.getElementById('headerRoomBadge').textContent = `Комната #${state.roomId}`;
+      document.getElementById('pocketBtn').classList.toggle('hidden', !(me && me.role && state.status !== 'LOBBY'));
+      renderActiveRolesBar(state);
 
-      // Показываем кнопку «Карман», если у игрока есть роль
-      const pocketBtn = document.getElementById('pocketBtn');
-      if (me && me.role && state.status !== 'LOBBY') {
-        pocketBtn.classList.remove('hidden');
-      } else {
-        pocketBtn.classList.add('hidden');
-      }
-
-      // Переключение экранов
-      const sJoin = document.getElementById('screenJoin');
-      const sLobby = document.getElementById('screenLobby');
-      const sReveal = document.getElementById('screenReveal');
-      const sGame = document.getElementById('screenGame');
-
-      sJoin.classList.add('hidden');
-      sLobby.classList.add('hidden');
-      sReveal.classList.add('hidden');
-      sGame.classList.add('hidden');
+      document.getElementById('screenJoin').classList.add('hidden');
+      document.getElementById('screenLobby').classList.add('hidden');
+      document.getElementById('screenReveal').classList.add('hidden');
+      document.getElementById('screenGame').classList.add('hidden');
 
       if (state.status === 'LOBBY') {
-        sLobby.classList.remove('hidden');
+        document.getElementById('screenLobby').classList.remove('hidden');
         renderLobby(state, me);
       } else if (state.status === 'ROLE_REVEAL') {
-        sReveal.classList.remove('hidden');
-        sReveal.classList.add('flex');
-        renderRevealScreen(state, me);
+        document.getElementById('screenReveal').classList.remove('hidden');
+        document.getElementById('screenReveal').classList.add('flex');
+        renderReveal(state, me);
       } else {
-        sGame.classList.remove('hidden');
-        renderGameScreen(state, me, prevStatus !== state.status);
+        document.getElementById('screenGame').classList.remove('hidden');
+        renderGame(state, me);
       }
     });
 
     function renderLobby(state, me) {
       document.getElementById('lobbyRoomCode').textContent = state.roomId;
-      document.getElementById('lobbyPlayerCount').textContent = state.players.length;
-
-      const listEl = document.getElementById('lobbyPlayersList');
-      listEl.innerHTML = '';
+      const list = document.getElementById('lobbyPlayersList');
+      list.innerHTML = '';
       state.players.forEach(p => {
-        const item = document.createElement('div');
-        item.className = 'bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-800 flex justify-between items-center text-sm';
-        item.innerHTML = `
-          <span class="font-medium text-white">${p.name} ${p.id === socket.id ? '<span class="text-xs text-amber-400">(Вы)</span>' : ''}</span>
-          ${p.isHost ? '<span class="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-md font-bold">Хост</span>' : ''}
-        `;
-        listEl.appendChild(item);
+        const div = document.createElement('div');
+        div.className = 'bg-slate-950 px-3 py-2 rounded-xl border border-slate-800 flex justify-between text-sm';
+        div.innerHTML = `<span>${p.name}</span> ${p.isHost ? '<span class="text-amber-400 text-xs">Хост</span>' : ''}`;
+        list.appendChild(div);
       });
 
       const isHost = state.hostId === socket.id;
-      const deckControls = document.getElementById('deckControls');
-      deckControls.innerHTML = '';
-
-      Object.keys(ROLE_INFO).forEach(roleKey => {
-        const count = Number(state.settings.deck[roleKey] || 0);
-        const info = ROLE_INFO[roleKey];
+      const deckC = document.getElementById('deckControls');
+      deckC.innerHTML = '';
+      Object.keys(ROLE_INFO).forEach(key => {
+        const cnt = Number(state.settings.deck[key] || 0);
         const card = document.createElement('div');
-        card.className = 'bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between';
+        card.className = 'bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex justify-between items-center text-xs';
         card.innerHTML = `
-          <div class="flex items-center gap-2.5">
-            <span class="text-2xl">${info.icon}</span>
-            <div>
-              <p class="text-sm font-bold text-white">${info.title}</p>
-              <p class="text-[11px] text-slate-400">${info.team}</p>
-            </div>
-          </div>
+          <span>${ROLE_INFO[key].icon} ${ROLE_INFO[key].name}</span>
           <div class="flex items-center gap-2">
-            ${isHost ? `<button onclick="adjustDeckRole('${roleKey}', -1)" class="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold">-</button>` : ''}
-            <span class="w-6 text-center font-mono font-bold text-amber-400">${count}</span>
-            ${isHost ? `<button onclick="adjustDeckRole('${roleKey}', 1)" class="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold">+</button>` : ''}
+            ${isHost ? `<button onclick="adjustDeck('${key}', -1)" class="px-2 bg-slate-800 rounded">-</button>` : ''}
+            <span class="font-bold text-amber-400">${cnt}</span>
+            ${isHost ? `<button onclick="adjustDeck('${key}', 1)" class="px-2 bg-slate-800 rounded">+</button>` : ''}
           </div>
         `;
-        deckControls.appendChild(card);
+        deckC.appendChild(card);
       });
 
-      const totalCards = Object.values(state.settings.deck).reduce((a, b) => a + Number(b || 0), 0);
-      const badge = document.getElementById('deckCounterBadge');
-      badge.textContent = `${totalCards} / ${state.players.length}`;
-      badge.className = totalCards === state.players.length
-        ? 'text-lg font-bold text-emerald-400'
-        : 'text-lg font-bold text-red-400';
-
-      document.getElementById('btnAutoBalance').classList.toggle('hidden', !isHost);
+      const total = Object.values(state.settings.deck).reduce((a, b) => a + Number(b || 0), 0);
+      document.getElementById('deckCounterBadge').textContent = `${total} / ${state.players.length}`;
       document.getElementById('hostStartPanel').classList.toggle('hidden', !isHost);
-      document.getElementById('guestWaitText').classList.toggle('hidden', isHost);
     }
 
-    function renderRevealScreen(state, me) {
+    function adjustDeck(key, delta) {
+      if (!currentState || currentState.hostId !== socket.id) return;
+      const deck = { ...currentState.settings.deck };
+      deck[key] = Math.max(0, Number(deck[key] || 0) + delta);
+      socket.emit('room:update_settings', { roomId: currentState.roomId, deck });
+    }
+
+    function renderReveal(state, me) {
       if (me && me.role && ROLE_INFO[me.role]) {
-        const info = ROLE_INFO[me.role];
-        document.getElementById('revealRoleTeam').textContent = info.team;
-        document.getElementById('revealRoleIcon').textContent = info.icon;
-        document.getElementById('revealRoleTitle').textContent = info.title;
-        document.getElementById('revealRoleDesc').textContent = info.desc;
+        const inf = ROLE_INFO[me.role];
+        document.getElementById('revealRoleTeam').textContent = inf.team;
+        document.getElementById('revealRoleIcon').textContent = inf.icon;
+        document.getElementById('revealRoleTitle').textContent = inf.name;
+        document.getElementById('revealRoleDesc').textContent = inf.desc;
       }
-
-      const cardEl = document.getElementById('revealCardInner');
-      if (me && !me.hasRevealedCard) {
-        cardEl.classList.remove('is-flipped');
-      } else if (me && me.hasRevealedCard) {
-        cardEl.classList.add('is-flipped');
-      }
-
-      const revealedCount = state.players.filter(p => p.hasRevealedCard).length;
-      document.getElementById('revealWaitCounter').textContent =
-        `Вскрыли карты: ${revealedCount} из ${state.players.length}. Игра начнется автоматически, когда все посмотрят свои роли.`;
     }
 
-    function renderGameScreen(state, me, phaseChanged) {
-      const phaseLabels = {
-        FIRST_NIGHT_INTRO: '🌙 ПЕРВАЯ НОЧЬ (ЗНАКОМСТВО МАФИИ)',
-        NIGHT: `🌙 НОЧЬ (РАУНД ${state.round})`,
-        DAY: `☀️ ДЕНЬ — ОБСУЖДЕНИЕ (РАУНД ${state.round})`,
-        VOTING: `⚖️ ДНЕВНОЕ ГОЛОСОВАНИЕ`,
-        GAME_OVER: `🏆 ИГРА ОКОНЧЕНА`
-      };
-
-      document.getElementById('phaseBadge').textContent = phaseLabels[state.status] || state.status;
+    function renderGame(state, me) {
+      document.getElementById('phaseBadge').textContent = state.status;
       document.getElementById('timerDisplay').textContent = `${state.timeLeft || 0}с`;
       document.getElementById('phaseAnnouncement').textContent = state.announcement || '';
 
-      const isHost = state.hostId === socket.id;
-      document.getElementById('btnHostSkipDay').classList.toggle('hidden', !(isHost && state.status === 'DAY'));
-      document.getElementById('btnBackToLobby').classList.toggle('hidden', !(isHost && state.status === 'GAME_OVER'));
-
-      // Список игроков со статусами и подсветкой мафии для соратников
-      const playersList = document.getElementById('gamePlayersList');
-      playersList.innerHTML = '';
-      state.players.forEach(p => {
-        const isTeammateMafia = (p.role === 'mafia' || p.role === 'don') && p.id !== socket.id && state.status !== 'GAME_OVER';
-        const roleTag = p.role && ROLE_INFO[p.role]
-          ? `<span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300">${ROLE_INFO[p.role].icon} ${ROLE_INFO[p.role].title}</span>`
-          : '';
-        const votesTag = state.status === 'VOTING' && p.votesReceived > 0
-          ? `<span class="text-xs bg-red-600/30 text-red-300 px-2 py-0.5 rounded font-bold">Голосов: ${p.votesReceived}</span>`
-          : '';
-
-        const row = document.createElement('div');
-        row.className = `p-3 rounded-xl border flex items-center justify-between ${
-          !p.isAlive
-            ? 'bg-red-950/20 border-red-900/40 opacity-60'
-            : isTeammateMafia
-              ? 'bg-red-950/40 border-red-500/70'
-              : 'bg-slate-950 border-slate-800'
-        }`;
-
-        row.innerHTML = `
-          <div>
-            <p class="font-semibold text-sm text-white">
-              ${p.name} ${p.id === socket.id ? '<span class="text-xs text-amber-400">(Вы)</span>' : ''}
-            </p>
-            <div class="flex items-center gap-1.5 mt-1">${roleTag} ${votesTag}</div>
-          </div>
-          <div>
-            ${p.isAlive
-              ? '<span class="text-xs font-bold text-emerald-400">Жив</span>'
-              : '<span class="text-xs font-bold text-red-500">💀 Мертв</span>'}
-          </div>
-        `;
-        playersList.appendChild(row);
-      });
-
       const isAlive = me ? me.isAlive : false;
-      const myRole = me ? me.role : myRoleCached;
-
-      // Механика смерти («Режим призрака»)
       document.getElementById('ghostBanner').classList.toggle('hidden', isAlive);
 
-      // Управление общим чатом
-      const canUseGlobalChat = isAlive && (state.status === 'DAY' || state.status === 'VOTING' || state.status === 'GAME_OVER');
-      document.getElementById('globalChatInputRow').classList.toggle('hidden', !canUseGlobalChat);
-      document.getElementById('globalChatStatus').textContent = !isAlive
-        ? 'Чат заблокирован (Вы мертвы)'
-        : canUseGlobalChat
-          ? 'Открыт для обсуждения'
-          : 'Ночь — общий чат спит';
+      const list = document.getElementById('gamePlayersList');
+      list.innerHTML = '';
+      state.players.forEach(p => {
+        const div = document.createElement('div');
+        div.className = `p-2.5 rounded-xl border flex justify-between text-sm ${p.isAlive ? 'bg-slate-950 border-slate-800' : 'bg-red-950/20 opacity-60'}`;
+        div.innerHTML = `<span>${p.name}</span> <span>${p.isAlive ? '🟢 Жив' : '💀 Мертв'}</span>`;
+        list.appendChild(div);
+      });
 
-      // Управление закрытым ночным чатом мафии
-      const isMafiaMember = myRole === 'mafia' || myRole === 'don';
-      const showMafiaChat = isMafiaMember && (state.status === 'NIGHT' || state.status === 'FIRST_NIGHT_INTRO');
-      document.getElementById('mafiaChatBox').classList.toggle('hidden', !showMafiaChat);
-      document.getElementById('mafiaChatInputRow').classList.toggle('hidden', !isAlive);
+      const isMafia = me && (me.role === 'don' || me.role === 'mafia');
+      document.getElementById('mafiaChatBox').classList.toggle('hidden', !(isMafia && (state.status === 'NIGHT' || state.status === 'FIRST_NIGHT_INTRO')));
 
-      // Панель действий (Ночные способности или Дневное голосование)
-      renderActionPanel(state, isAlive, myRole, phaseChanged);
-    }
-
-    function renderActionPanel(state, isAlive, myRole, phaseChanged) {
       const panel = document.getElementById('actionPanel');
-      const title = document.getElementById('actionPanelTitle');
-      const grid = document.getElementById('actionTargetsGrid');
-
-      if (!isAlive) {
-        panel.classList.add('hidden');
-        return;
-      }
-
-      if (state.status === 'NIGHT') {
-        const activeRoles = ['don', 'mafia', 'commissar', 'doctor', 'hooker', 'hobo'];
-        if (!activeRoles.includes(myRole)) {
-          panel.classList.add('hidden');
-          return;
-        }
-
+      if (isAlive && (state.status === 'NIGHT' || state.status === 'VOTING')) {
         panel.classList.remove('hidden');
-        if (phaseChanged) {
-          const actionTitles = {
-            don: '🎩 Ход Дона: Выберите жертву выстрела и проверьте игрока на Комиссара',
-            mafia: '🔫 Выстрел Мафии: Выберите жертву этой ночи',
-            commissar: '🚓 Проверка Комиссара: Кого проверить этой ночью?',
-            doctor: '💉 Дежурство Доктора: Кого вылечить этой ночью?',
-            hooker: '💋 Ход Любовницы: Кого заблокировать до утра?',
-            hobo: '🍾 Слежка Бомжа: За чьим домом проследить?'
-          };
-          title.textContent = actionTitles[myRole] || 'Ночное действие';
-        }
-
+        const grid = document.getElementById('actionTargetsGrid');
         grid.innerHTML = '';
-        const aliveTargets = state.players.filter(p => p.isAlive);
-
-        aliveTargets.forEach(target => {
-          const isSelf = target.id === socket.id;
-          const doctorSelfBlocked = myRole === 'doctor' && isSelf && state.doctorLastTarget === socket.id;
-
-          if (myRole === 'hooker' && isSelf) return;
-
-          if (myRole === 'don') {
-            const box = document.createElement('div');
-            box.className = 'bg-slate-950 border border-slate-800 p-3 rounded-xl flex items-center justify-between gap-2';
-            box.innerHTML = `
-              <span class="text-sm font-medium text-white">${target.name}</span>
-              <div class="flex gap-1.5">
-                <button onclick="submitNightAction('kill', '${target.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-2.5 py-1.5 rounded-lg font-bold">🔫 Убить</button>
-                ${!isSelf ? `<button onclick="submitNightAction('don_check', '${target.id}')" class="text-xs bg-amber-600 hover:bg-amber-500 text-slate-950 px-2.5 py-1.5 rounded-lg font-bold">🔍 На Комиссара</button>` : ''}
-              </div>
-            `;
-            grid.appendChild(box);
-          } else {
-            const actionMap = {
-              mafia: 'kill',
-              commissar: 'check',
-              doctor: 'heal',
-              hooker: 'block',
-              hobo: 'watch'
-            };
-            const btn = document.createElement('button');
-            btn.disabled = doctorSelfBlocked;
-            btn.onclick = () => submitNightAction(actionMap[myRole], target.id);
-            btn.className = `p-3 rounded-xl border text-left text-sm font-medium transition flex justify-between items-center ${
-              doctorSelfBlocked
-                ? 'bg-slate-950 border-slate-900 text-slate-600 cursor-not-allowed'
-                : 'bg-slate-950 border-slate-800 hover:border-amber-500 text-white'
-            }`;
-            btn.innerHTML = `
-              <span>${target.name} ${isSelf ? '(Себя)' : ''}</span>
-              <span class="text-xs text-amber-400">${doctorSelfBlocked ? 'Нельзя 2 раза подряд' : 'Выбрать →'}</span>
-            `;
-            grid.appendChild(btn);
-          }
-        });
-      } else if (state.status === 'VOTING') {
-        panel.classList.remove('hidden');
-        title.textContent = '⚖️ Дневное голосование: Выберите подозреваемого на выбывание';
-        grid.innerHTML = '';
-
-        state.players.filter(p => p.isAlive).forEach(target => {
+        state.players.filter(p => p.isAlive).forEach(t => {
           const btn = document.createElement('button');
-          btn.onclick = () => submitDayVote(target.id);
-          btn.className = 'p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-red-500 text-left text-sm font-medium text-white flex justify-between items-center transition';
-          btn.innerHTML = `
-            <span>Против «${target.name}»</span>
-            <span class="text-xs text-red-400 font-bold">Голосовать (${target.votesReceived || 0})</span>
-          `;
+          btn.className = 'p-2.5 bg-slate-950 border border-slate-800 hover:border-amber-500 rounded-xl text-left text-xs text-white';
+          btn.textContent = t.name;
+          btn.onclick = () => {
+            if (state.status === 'NIGHT') submitNightAction('action', t.id);
+            else socket.emit('day:vote', { roomId: currentState.roomId, targetId: t.id });
+          };
           grid.appendChild(btn);
         });
-
-        const skipBtn = document.createElement('button');
-        skipBtn.onclick = () => submitDayVote('skip');
-        skipBtn.className = 'p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-center text-sm font-semibold text-slate-300 transition sm:col-span-2';
-        skipBtn.textContent = 'Воздержаться (Пропустить голосование)';
-        grid.appendChild(skipBtn);
       } else {
         panel.classList.add('hidden');
       }
