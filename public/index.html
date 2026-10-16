@@ -4,254 +4,342 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Мафия Online — Расширенное Издание</title>
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- React 18 -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel для JSX -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Socket.io -->
+  <!-- Socket.io загружается напрямую с вашего сервера Render -->
   <script src="/socket.io/socket.io.js"></script>
-
   <style>
-    .perspective-1000 { perspective: 1000px; }
-    .preserve-3d {
+    :root {
+      --bg-main: #020617;
+      --bg-card: #0f172a;
+      --bg-inner: #090d16;
+      --border: #1e293b;
+      --amber: #f59e0b;
+      --amber-light: #fcd34d;
+      --emerald: #10b981;
+      --red: #ef4444;
+      --indigo: #6366f1;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-main);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    button {
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+      transition: all 0.2s ease;
+    }
+    button:active { transform: scale(0.98); }
+    input, textarea {
+      width: 100%;
+      background: var(--bg-inner);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      outline: none;
+      font-family: inherit;
+    }
+    input:focus, textarea:focus { border-color: var(--amber); }
+
+    .container-sm { max-width: 440px; width: 100%; margin: auto; }
+    .container-lg { max-width: 1120px; width: 100%; margin: 0 auto; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 20px 45px rgba(0,0,0,0.55);
+    }
+    .btn-primary {
+      width: 100%;
+      background: var(--amber);
+      color: #020617;
+      font-weight: 800;
+      padding: 13px;
+      border-radius: 12px;
+      font-size: 15px;
+    }
+    .btn-primary:hover { background: var(--amber-light); }
+    .btn-secondary {
+      width: 100%;
+      background: #1e293b;
+      color: var(--text);
+      font-weight: 600;
+      padding: 13px;
+      border-radius: 12px;
+      font-size: 15px;
+    }
+    .btn-secondary:hover { background: #334155; }
+    .btn-emerald {
+      width: 100%;
+      background: var(--emerald);
+      color: #022c22;
+      font-weight: 800;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 15px;
+    }
+
+    /* Сетки */
+    .grid-lobby {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+    .grid-game {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+    .roles-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      max-height: 440px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .targets-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+      gap: 8px;
+    }
+    @media (min-width: 860px) {
+      .grid-lobby { grid-template-columns: 340px 1fr; }
+      .grid-game { grid-template-columns: 320px 1fr; }
+      .roles-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    /* Бейджи фракций */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+    }
+    .badge-red { background: rgba(6, 78, 59, 0.7); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.4); }
+    .badge-black { background: rgba(127, 29, 29, 0.7); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); }
+    .badge-neutral { background: rgba(88, 28, 135, 0.7); color: #d8b4fe; border-color: rgba(168, 85, 247, 0.4); }
+    .badge-cult { background: rgba(112, 26, 117, 0.7); color: #f0abfc; border-color: rgba(217, 70, 239, 0.4); }
+    .badge-orange { background: rgba(124, 45, 18, 0.7); color: #fdba74; border-color: rgba(249, 115, 22, 0.4); }
+
+    /* 3D Карточка роли */
+    .perspective-1000 { perspective: 1000px; width: 290px; height: 400px; margin: 20px auto; cursor: pointer; }
+    .card-3d-inner {
+      width: 100%; height: 100%; position: relative;
       transform-style: preserve-3d;
       -webkit-transform-style: preserve-3d;
       transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
-    .backface-hidden {
+    .card-3d-inner.flipped { transform: rotateY(180deg); }
+    .card-face {
+      position: absolute; inset: 0;
       backface-visibility: hidden;
       -webkit-backface-visibility: hidden;
+      border-radius: 20px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.75);
     }
-    .rotateY-180 {
+    .card-front {
+      background: linear-gradient(145deg, #0f172a, #020617);
+      border: 3px solid rgba(245, 158, 11, 0.45);
+      justify-content: center;
+      text-align: center;
+    }
+    .card-back {
+      background: linear-gradient(180deg, #0f172a, #18181b);
+      border: 3px solid var(--amber);
       transform: rotateY(180deg);
+      text-align: center;
     }
 
+    /* Чат */
+    .chat-box {
+      height: 270px;
+      background: var(--bg-inner);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg-system {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #fde68a;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    .msg-last-words {
+      background: rgba(127, 29, 29, 0.55);
+      border: 2px solid #dc2626;
+      color: #fecaca;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 13px;
+    }
+
+    /* Эффект смерти и капли крови */
     @keyframes bloodDrip {
-      0% { transform: translateY(-100%) scaleY(0.8); opacity: 0.9; }
-      70% { opacity: 0.95; }
-      100% { transform: translateY(105vh) scaleY(1.6); opacity: 0; }
+      0% { transform: translateY(-100%) scaleY(0.8); opacity: 0.95; }
+      75% { opacity: 0.95; }
+      100% { transform: translateY(105vh) scaleY(1.7); opacity: 0; }
     }
     @keyframes screenShake {
-      0%, 100% { transform: translate(0, 0) rotate(0deg); }
-      15% { transform: translate(-8px, -6px) rotate(-1deg); }
-      30% { transform: translate(8px, 4px) rotate(1deg); }
-      45% { transform: translate(-6px, 6px) rotate(-0.5deg); }
-      60% { transform: translate(6px, -4px) rotate(0.5deg); }
-      75% { transform: translate(-4px, 2px) rotate(0deg); }
+      0%, 100% { transform: translate(0, 0); }
+      20% { transform: translate(-8px, -6px); }
+      40% { transform: translate(8px, 5px); }
+      60% { transform: translate(-6px, 4px); }
+      80% { transform: translate(6px, -4px); }
     }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: scale(0.95); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    .animate-shake {
-      animation: screenShake 0.65s cubic-bezier(.36,.07,.19,.97) both;
-    }
-    .animate-fade-in {
-      animation: fadeIn 0.25s ease-out forwards;
-    }
+    .shake { animation: screenShake 0.6s ease both; }
     .blood-drop {
-      position: fixed;
-      top: 0;
-      width: 6px;
-      background: linear-gradient(180deg, #450a0a 0%, #991b1b 60%, #ef4444 100%);
-      border-radius: 0 0 9999px 9999px;
-      box-shadow: 0 0 12px rgba(220, 38, 38, 0.8);
-      pointer-events: none;
-      z-index: 60;
+      position: fixed; top: 0; width: 7px;
+      background: linear-gradient(180deg, #450a0a 0%, #991b1b 55%, #ef4444 100%);
+      border-radius: 0 0 999px 999px;
+      box-shadow: 0 0 12px rgba(220, 38, 38, 0.85);
+      pointer-events: none; z-index: 95;
       animation: bloodDrip linear infinite;
     }
-    .blood-vignette {
-      background: radial-gradient(circle, rgba(0,0,0,0.45) 30%, rgba(127,29,29,0.9) 100%);
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 90;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    .death-backdrop {
+      position: fixed; inset: 0; z-index: 90;
+      background: radial-gradient(circle, rgba(0,0,0,0.5) 25%, rgba(127,29,29,0.92) 100%);
+      backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
     }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 font-sans selection:bg-amber-500 selection:text-slate-950">
-  <div id="root"></div>
+<body>
+  <div id="app" style="width: 100%; display: flex; flex-direction: column; align-items: center; min-height: 92vh;"></div>
+  <div id="modal-root"></div>
+  <div id="death-root"></div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
-
-    const socket = typeof io !== 'undefined' ? io() : { on: () => {}, off: () => {}, emit: () => {}, id: 'offline' };
-
+  <script>
+    // ==================== СПРАВОЧНИК ВСЕХ 16 РОЛЕЙ ====================
     const ROLES_CATALOG = {
       civilian: {
-        name: 'Мирный житель',
-        icon: '🧑',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'NONE',
-        description: 'Не имеет активных ночных способностей. Главная сила — логика, анализ поведения игроков в дневном чате и участие в голосовании.',
+        name: 'Мирный житель', icon: '🧑', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'NONE',
+        description: 'Не имеет активных ночных способностей. Главная задача — вычислить мафию и нейтралов на дневном обсуждении.',
         winCondition: 'Побеждает, когда все члены Мафии и Некромант уничтожены.'
       },
       lucky: {
-        name: 'Счастливчик',
-        icon: '🍀',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'NONE',
-        description: 'Пассивный навык «Удача»: если ночью мафия стреляет в него, система делает бросок (шанс выживания 50%). При успехе Счастливчик остается жив, а мафия считает выстрел состоявшимся.',
+        name: 'Счастливчик', icon: '🍀', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'NONE',
+        description: 'Пассивный навык «Удача»: если ночью мафия стреляет в него, система делает случайный бросок (шанс выживания 50%). При успехе Счастливчик остается жив!',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       commissar: {
-        name: 'Комиссар (Шериф)',
-        icon: '🕵️',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь проверяет одного игрока на принадлежность к мафии. Внимание: если игрока в эту же ночь подставил Подстрекатель, Комиссар увидит «Черный» статус.',
+        name: 'Комиссар (Шериф)', icon: '🕵️', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'SINGLE_ALIVE',
+        description: 'Каждую ночь проверяет одного игрока на принадлежность к мафии. Если игрока подставил Подстрекатель, проверка покажет «Черный» статус.',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       doctor: {
-        name: 'Доктор',
-        icon: '⚕️',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь выбирает игрока, которого спасает от смертельного покушения. Одного и того же человека (включая себя) нельзя лечить две ночи подряд.',
+        name: 'Доктор', icon: '⚕️', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'SINGLE_ALIVE',
+        description: 'Каждую ночь лечит выбранного игрока, спасая от убийства. Нельзя лечить одного и того же человека (включая себя) две ночи подряд.',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       hooker: {
-        name: 'Любовница (Путана)',
-        icon: '💋',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь блокирует активную способность выбранного игрока (лишает хода Доктора, Шерифа, Кукловода или стрелка Мафии).',
+        name: 'Любовница (Путана)', icon: '💋', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'SINGLE_ALIVE',
+        description: 'Каждую ночь блокирует активный ход выбранного игрока (лишает способности Доктора, Шерифа, Кукловода или стрелка Мафии).',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       hobo: {
-        name: 'Бомж (Свидетель)',
-        icon: '🍾',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь следит за домом одного игрока и под утро узнает имена всех, кто приходил к этому объекту ночью.',
+        name: 'Бомж (Свидетель)', icon: '🍾', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'SINGLE_ALIVE',
+        description: 'Ночью следит за одним игроком и под утро видит имена всех, кто приходил к этому объекту.',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       journalist: {
-        name: 'Журналист',
-        icon: '📰',
-        faction: 'RED',
-        factionLabel: 'Мирный город (Красные)',
-        badgeClass: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50',
-        targetMode: 'DOUBLE_ALIVE',
-        description: 'Ночью выбирает двух игроков и проводит расследование. Ведущий сообщает, принадлежат ли они к ОДНОЙ фракции или к РАЗНЫМ, без раскрытия конкретных ролей.',
+        name: 'Журналист', icon: '📰', factionLabel: 'Мирный город (Красные)', badge: 'badge-red', targetMode: 'DOUBLE_ALIVE',
+        description: 'Ночью выбирает двух игроков и узнает, принадлежат ли они к ОДНОЙ фракции или к РАЗНЫМ, без раскрытия конкретных ролей.',
         winCondition: 'Побеждает вместе с мирными жителями.'
       },
       kamikaze: {
-        name: 'Камикадзе',
-        icon: '💣',
-        faction: 'CONFIGURABLE',
-        factionLabel: 'Настраиваемая (Мирный или Мафия)',
-        badgeClass: 'bg-orange-950/80 text-orange-300 border-orange-700/50',
-        targetMode: 'NONE',
-        description: 'Навык «Последнее слово»: если днем город решает казнить его голосованием, Камикадзе перед смертью вскрывает свою роль и забирает с собой в могилу любого выбранного игрока.',
-        winCondition: 'Зависит от настройки ведущего в лобби (за Город или за Мафию).'
+        name: 'Камикадзе', icon: '💣', factionLabel: 'Настраиваемая (Мирный / Мафия)', badge: 'badge-orange', targetMode: 'NONE',
+        description: 'Навык «Последнее слово»: если днем город казнит его голосованием, Камикадзе перед смертью вскрывает роль и утаскивает в могилу любого выбранного игрока!',
+        winCondition: 'Побеждает со своей фракцией (Город или Мафия — по выбору хоста).'
       },
       mafia: {
-        name: 'Мафия (Рядовой)',
-        icon: '🦹‍♂️',
-        faction: 'BLACK',
-        factionLabel: 'Синдикат Мафии (Черные)',
-        badgeClass: 'bg-red-950/80 text-red-300 border-red-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Участвует в закрытом ночном чате мафии и голосует за устранение жертвы каждую ночь.',
+        name: 'Мафия (Рядовой)', icon: '🦹‍♂️', factionLabel: 'Синдикат Мафии (Черные)', badge: 'badge-black', targetMode: 'SINGLE_ALIVE',
+        description: 'Общается в закрытом ночном чате мафии и участвует в ночном устранении жертвы.',
         winCondition: 'Побеждает, когда количество мафии сравнивается с числом остальных выживших.'
       },
       don: {
-        name: 'Дон Мафии',
-        icon: '🎩',
-        faction: 'BLACK',
-        factionLabel: 'Синдикат Мафии (Черные)',
-        badgeClass: 'bg-red-950/80 text-red-300 border-red-700/50',
-        targetMode: 'DOUBLE_ALIVE',
-        description: 'Глава мафии. Ночью участвует в выстреле (Цель 1) и дополнительно проверяет одного игрока на наличие роли Комиссара (Цель 2).',
+        name: 'Дон Мафии', icon: '🎩', factionLabel: 'Синдикат Мафии (Черные)', badge: 'badge-black', targetMode: 'DOUBLE_ALIVE',
+        description: 'Глава мафии. Ночью выбирает жертву для выстрела (Цель 1) и проверяет одного игрока на роль Комиссара (Цель 2).',
         winCondition: 'Побеждает вместе с синдикатом Мафии.'
       },
       instigator: {
-        name: 'Подстрекатель (Лжесвидетель)',
-        icon: '🐍',
-        faction: 'BLACK',
-        factionLabel: 'Синдикат Мафии (Черные)',
-        badgeClass: 'bg-red-950/80 text-red-300 border-red-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Один раз за всю партию ночью «подбрасывает улики» против выбранного мирного жителя. Если в эту ночь Комиссар или Журналист проверяют этого игрока, система выдает ему «Черный» статус.',
+        name: 'Подстрекатель', icon: '🐍', factionLabel: 'Синдикат Мафии (Черные)', badge: 'badge-black', targetMode: 'SINGLE_ALIVE',
+        description: 'Раз за игру ночью подбрасывает улики против мирного игрока. Для Шерифа и Журналиста в эту ночь жертва выглядит «Черной» (мафией).',
         winCondition: 'Побеждает вместе с синдикатом Мафии.'
       },
       suicider: {
-        name: 'Самоубийца',
-        icon: '🃏',
-        faction: 'NEUTRAL',
-        factionLabel: 'Нейтрал-одиночка',
-        badgeClass: 'bg-purple-950/80 text-purple-300 border-purple-700/50',
-        targetMode: 'NONE',
-        description: 'Не имеет ночных ходов. Должен вести себя максимально подозрительно днем и провоцировать город, чтобы добиться собственной казни на дневном голосовании.',
-        winCondition: 'Мгновенная сольная победа (игра останавливается), если город казнит его днем!'
+        name: 'Самоубийца', icon: '🃏', factionLabel: 'Нейтрал-одиночка', badge: 'badge-neutral', targetMode: 'NONE',
+        description: 'Не имеет ночных ходов. Должен вести себя подозрительно днем и добиться собственной казни на дневном голосовании.',
+        winCondition: 'Мгновенная сольная победа, если город казнит его днем!'
       },
       necromancer: {
-        name: 'Некромант',
-        icon: '🔮',
-        faction: 'NEUTRAL',
-        factionLabel: 'Нейтрал-одиночка',
-        badgeClass: 'bg-purple-950/80 text-purple-300 border-purple-700/50',
-        targetMode: 'DEAD_AND_ALIVE',
-        description: 'Каждую ночь выбирает одного из уже погибших игроков (Цель 1) и временно «воскрешает» его способность на одну ночь, направляя ее на живого игрока (Цель 2).',
-        winCondition: 'Остаться последним выжившим среди всех игроков за столом.'
+        name: 'Некромант', icon: '🔮', factionLabel: 'Нейтрал-одиночка', badge: 'badge-neutral', targetMode: 'DEAD_AND_ALIVE',
+        description: 'Ночью выбирает погибшего игрока (Цель 1) и временно воскрешает его способность на одну ночь, направляя ее на живого игрока (Цель 2).',
+        winCondition: 'Остаться последним выжившим среди всех игроков.'
       },
       cultist: {
-        name: 'Сектант (Проповедник)',
-        icon: '🕯️',
-        faction: 'CULT',
-        factionLabel: 'Тайный Культ Секты',
-        badgeClass: 'bg-fuchsia-950/80 text-fuchsia-300 border-fuchsia-700/50',
-        targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь вербует одного живого игрока в свой культ. Завербованные узнают друг друга, но сохраняют свои базовые роли. Если Сектанта убивают — культ распадается.',
-        winCondition: 'Побеждает, когда все выжившие за столом игроки состоят в секте.'
+        name: 'Сектант (Проповедник)', icon: '🕯️', factionLabel: 'Тайный Культ Секты', badge: 'badge-cult', targetMode: 'SINGLE_ALIVE',
+        description: 'Каждую ночь вербует одного игрока в культ. Завербованные видят друг друга, сохраняя прежние роли. При гибели Сектанта культ распадается.',
+        winCondition: 'Все выжившие за столом игроки должны состоять в секте.'
       },
       puppeteer: {
-        name: 'Кукловод',
-        icon: '🎭',
-        faction: 'NEUTRAL',
-        factionLabel: 'Нейтрал / Манипулятор',
-        badgeClass: 'bg-indigo-950/80 text-indigo-300 border-indigo-700/50',
-        targetMode: 'DOUBLE_ALIVE',
-        description: 'Ночью выбирает двух живых игроков: Марионетку (Цель 1) и Новую мишень (Цель 2). Если первый игрок использует активное действие ночью, Кукловод перенаправляет его на второго.',
-        winCondition: 'Выжить и манипулировать столом.'
+        name: 'Кукловод', icon: '🎭', factionLabel: 'Нейтрал / Манипулятор', badge: 'badge-neutral', targetMode: 'DOUBLE_ALIVE',
+        description: 'Ночью выбирает двух игроков: если первый использует активное действие, Кукловод принудительно перенаправляет его ход на второго.',
+        winCondition: 'Выжить и переиграть стол.'
       },
       mirror: {
-        name: 'Зеркало (Хамелеон)',
-        icon: '🪞',
-        faction: 'NEUTRAL',
-        factionLabel: 'Нейтрал-трансформер',
-        badgeClass: 'bg-cyan-950/80 text-cyan-300 border-cyan-700/50',
-        targetMode: 'FIRST_NIGHT_ONLY',
-        description: 'В первую ночь выбирает игрока-донора. До его гибели считается обычным мирным жителем. Как только донор погибает, Зеркало полностью копирует его роль и фракцию.',
-        winCondition: 'Побеждает с той фракцией, чью роль скопировало.'
+        name: 'Зеркало (Хамелеон)', icon: '🪞', factionLabel: 'Нейтрал-трансформер', badge: 'badge-neutral', targetMode: 'FIRST_NIGHT_ONLY',
+        description: 'В первую ночь выбирает игрока-донора. Как только донор погибает, Зеркало копирует его роль и переходит в его фракцию.',
+        winCondition: 'Побеждает с фракцией скопированной роли.'
       }
     };
 
-    // ==================== СИНТЕЗАТОР ЗВУКОВ WEB AUDIO API ====================
+    // ==================== WEB AUDIO API ЗВУКИ ====================
     let audioCtx = null;
-    function getAudioContext() {
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume();
       return audioCtx;
     }
 
     function playCardFlipSound() {
       try {
-        const ctx = getAudioContext();
+        const ctx = getAudioCtx();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
@@ -259,788 +347,526 @@
         osc.frequency.exponentialRampToValueAtTime(90, ctx.currentTime + 0.09);
         gain.gain.setValueAtTime(0.25, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.09);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.09);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.09);
       } catch (e) {}
     }
 
     function playPhaseChangeSound() {
       try {
-        const ctx = getAudioContext();
+        const ctx = getAudioCtx();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'triangle';
         osc.frequency.setValueAtTime(140, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(65, ctx.currentTime + 0.55);
+        osc.frequency.exponentialRampToValueAtTime(65, ctx.currentTime + 0.5);
         gain.gain.setValueAtTime(0.01, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.1);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.55);
+        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.1);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.5);
       } catch (e) {}
     }
 
     function playHorrorDeathSound() {
       try {
-        const ctx = getAudioContext();
+        const ctx = getAudioCtx();
         const now = ctx.currentTime;
-
+        // Удары сердца
         [0, 0.28, 0.85, 1.12].forEach((offset, idx) => {
-          const heartOsc = ctx.createOscillator();
-          const heartGain = ctx.createGain();
-          heartOsc.type = 'sine';
-          heartOsc.frequency.setValueAtTime(idx % 2 === 0 ? 65 : 50, now + offset);
-          heartOsc.frequency.exponentialRampToValueAtTime(25, now + offset + 0.22);
-          heartGain.gain.setValueAtTime(0.6, now + offset);
-          heartGain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.22);
-          heartOsc.connect(heartGain);
-          heartGain.connect(ctx.destination);
-          heartOsc.start(now + offset);
-          heartOsc.stop(now + offset + 0.23);
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(idx % 2 === 0 ? 65 : 50, now + offset);
+          osc.frequency.exponentialRampToValueAtTime(25, now + offset + 0.22);
+          gain.gain.setValueAtTime(0.6, now + offset);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.22);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(now + offset); osc.stop(now + offset + 0.23);
         });
-
+        // Крик ужаса + колокол
         [580, 615, 890].forEach(freq => {
-          const screamOsc = ctx.createOscillator();
-          const screamFilter = ctx.createBiquadFilter();
-          const screamGain = ctx.createGain();
-
-          screamOsc.type = 'sawtooth';
-          screamOsc.frequency.setValueAtTime(freq, now + 0.45);
-          screamOsc.frequency.exponentialRampToValueAtTime(freq * 1.45, now + 0.75);
-          screamOsc.frequency.exponentialRampToValueAtTime(190, now + 2.3);
-
-          screamFilter.type = 'bandpass';
-          screamFilter.frequency.setValueAtTime(1100, now + 0.45);
-          screamFilter.Q.setValueAtTime(4, now + 0.45);
-
-          screamGain.gain.setValueAtTime(0.001, now + 0.45);
-          screamGain.gain.linearRampToValueAtTime(0.22, now + 0.55);
-          screamGain.gain.exponentialRampToValueAtTime(0.0001, now + 2.35);
-
-          screamOsc.connect(screamFilter);
-          screamFilter.connect(screamGain);
-          screamGain.connect(ctx.destination);
-          screamOsc.start(now + 0.45);
-          screamOsc.stop(now + 2.4);
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(freq, now + 0.4);
+          osc.frequency.exponentialRampToValueAtTime(180, now + 2.2);
+          gain.gain.setValueAtTime(0.001, now + 0.4);
+          gain.gain.linearRampToValueAtTime(0.15, now + 0.55);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + 2.2);
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.start(now + 0.4); osc.stop(now + 2.25);
         });
-
-        const bellOsc = ctx.createOscillator();
-        const bellGain = ctx.createGain();
-        bellOsc.type = 'triangle';
-        bellOsc.frequency.setValueAtTime(110, now + 0.4);
-        bellGain.gain.setValueAtTime(0.5, now + 0.4);
-        bellGain.gain.exponentialRampToValueAtTime(0.001, now + 3.2);
-        bellOsc.connect(bellGain);
-        bellGain.connect(ctx.destination);
-        bellOsc.start(now + 0.4);
-        bellOsc.stop(now + 3.2);
       } catch (e) {}
     }
 
-    // ==================== ГЛАВНЫЙ КОМПОНЕНТ ПРИЛОЖЕНИЯ ====================
-    function App() {
-      const [screen, setScreen] = useState('JOIN');
-      const [playerName, setPlayerName] = useState('');
-      const [roomIdInput, setRoomIdInput] = useState('');
-      const [roomData, setRoomData] = useState(null);
-      const [myRole, setMyRole] = useState(null);
-      const [isCardFlipped, setIsCardFlipped] = useState(false);
+    // ==================== СОСТОЯНИЕ КЛИЕНТА ====================
+    const socket = typeof io !== 'undefined' ? io() : null;
 
-      const [inspectedRoleKey, setInspectedRoleKey] = useState(null);
+    // Автоматическое определение кода комнаты из URL (/room/ABCDEF или ?room=ABCDEF)
+    const pathMatch = window.location.pathname.match(/\/room\/([A-Za-z0-9]+)/);
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialRoomCode = (pathMatch && pathMatch[1]) || urlParams.get('room') || '';
 
-      const [globalMessages, setGlobalMessages] = useState([]);
-      const [mafiaMessages, setMafiaMessages] = useState([]);
-      const [personalAlerts, setPersonalAlerts] = useState([]);
-      const [cultMembers, setCultMembers] = useState([]);
-      const [mafiaTeam, setMafiaTeam] = useState([]);
+    const state = {
+      screen: 'JOIN', // JOIN, LOBBY, REVEAL, GAME
+      playerName: '',
+      roomIdInput: initialRoomCode.toUpperCase(),
+      roomData: null,
+      myRole: null,
+      isCardFlipped: false,
+      inspectedRoleKey: null,
+      globalMessages: [],
+      mafiaMessages: [],
+      personalAlerts: [],
+      cultMembers: [],
+      mafiaTeam: [],
+      primaryTarget: null,
+      secondaryTarget: null,
+      actionConfirmed: false,
+      phaseInfo: { status: 'LOBBY', round: 1, timeLeft: 0, message: '' },
+      timerLeft: 0,
+      deathOverlay: { active: false, reason: '', canWriteLastWords: false, submitted: false }
+    };
 
-      const [globalInput, setGlobalInput] = useState('');
-      const [mafiaInput, setMafiaInput] = useState('');
+    // Таймер обратного отсчета
+    setInterval(() => {
+      if (state.timerLeft > 0) {
+        state.timerLeft--;
+        const timerEl = document.getElementById('phase-timer');
+        if (timerEl) timerEl.textContent = `⏱ ${state.timerLeft} сек`;
+      }
+    }, 1000);
 
-      const [primaryTarget, setPrimaryTarget] = useState(null);
-      const [secondaryTarget, setSecondaryTarget] = useState(null);
-      const [actionConfirmed, setActionConfirmed] = useState(false);
-      const [phaseInfo, setPhaseInfo] = useState({ status: 'LOBBY', round: 1, timeLeft: 0, message: '' });
-      const [timerLeft, setTimerLeft] = useState(0);
+    // ==================== ПОДПИСКИ SOCKET.IO ====================
+    if (socket) {
+      socket.on('room:update', (room) => {
+        state.roomData = room;
+        const me = room.players.find(p => p.id === socket.id);
+        if (me && me.role) state.myRole = me.role;
+        renderApp();
+      });
 
-      const [deathOverlay, setDeathOverlay] = useState({ active: false, reason: '', canWriteLastWords: false, submitted: false });
-      const [lastWordsText, setLastWordsText] = useState('');
+      socket.on('game:error', (msg) => alert(msg));
 
-      const chatEndRef = useRef(null);
+      socket.on('game:started', (room) => {
+        state.roomData = room;
+        const me = room.players.find(p => p.id === socket.id);
+        if (me) state.myRole = me.role;
+        state.isCardFlipped = false;
+        state.deathOverlay = { active: false, reason: '', canWriteLastWords: false, submitted: false };
+        state.screen = 'REVEAL';
+        renderApp();
+        renderDeathOverlay();
+      });
 
-      useEffect(() => {
-        socket.on('room:update', (room) => {
-          setRoomData(room);
-          const me = room.players.find(p => p.id === socket.id);
-          if (me && me.role) setMyRole(me.role);
+      socket.on('game:phase_change', ({ status, round, timeLeft, message }) => {
+        playPhaseChangeSound();
+        state.phaseInfo = { status, round: round || 1, timeLeft: timeLeft || 0, message: message || '' };
+        state.timerLeft = timeLeft || 0;
+        state.primaryTarget = null;
+        state.secondaryTarget = null;
+        state.actionConfirmed = false;
+        renderApp();
+      });
+
+      socket.on('chat:global:message', (msg) => {
+        state.globalMessages.push(msg);
+        renderApp();
+        const box = document.getElementById('global-chat-box');
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+
+      socket.on('chat:mafia:message', (msg) => {
+        state.mafiaMessages.push(msg);
+        renderApp();
+      });
+
+      socket.on('mafia:acquaintance', (team) => {
+        state.mafiaTeam = team;
+        renderApp();
+      });
+
+      socket.on('cult:update', (members) => {
+        state.cultMembers = members;
+        renderApp();
+      });
+
+      socket.on('personal:alert', (text) => {
+        state.personalAlerts.unshift({ id: Date.now() + Math.random(), text });
+        renderApp();
+      });
+
+      socket.on('mirror:transformed', ({ newRole, donorName }) => {
+        state.myRole = newRole;
+        const rName = ROLES_CATALOG[newRole] ? ROLES_CATALOG[newRole].name : newRole;
+        state.personalAlerts.unshift({
+          id: Date.now(),
+          text: `🪞 Ваш донор (${donorName}) погиб! Вы скопировали его роль: ${rName}`
         });
+        renderApp();
+      });
 
-        socket.on('game:error', (msg) => alert(msg));
-
-        socket.on('game:started', (room) => {
-          setRoomData(room);
-          const me = room.players.find(p => p.id === socket.id);
-          if (me) setMyRole(me.role);
-          setIsCardFlipped(false);
-          setDeathOverlay({ active: false, reason: '', canWriteLastWords: false, submitted: false });
-          setScreen('REVEAL');
-        });
-
-        socket.on('game:phase_change', ({ status, round, timeLeft, message }) => {
-          playPhaseChangeSound();
-          setPhaseInfo({ status, round: round || 1, timeLeft: timeLeft || 0, message });
-          setTimerLeft(timeLeft || 0);
-          setPrimaryTarget(null);
-          setSecondaryTarget(null);
-          setActionConfirmed(false);
-        });
-
-        socket.on('chat:global:message', (msg) => {
-          setGlobalMessages(prev => [...prev, msg]);
-        });
-
-        socket.on('chat:mafia:message', (msg) => {
-          setMafiaMessages(prev => [...prev, msg]);
-        });
-
-        socket.on('mafia:acquaintance', (team) => {
-          setMafiaTeam(team);
-        });
-
-        socket.on('cult:update', (members) => {
-          setCultMembers(members);
-        });
-
-        socket.on('personal:alert', (text) => {
-          setPersonalAlerts(prev => [{ id: Date.now() + Math.random(), text }, ...prev]);
-        });
-
-        socket.on('mirror:transformed', ({ newRole, donorName }) => {
-          setMyRole(newRole);
-          setPersonalAlerts(prev => [{
-            id: Date.now(),
-            text: `🪞 Ваш донор (${donorName}) погиб! Вы скопировали его роль: ${ROLES_CATALOG[newRole]?.name || newRole}`
-          }, ...prev]);
-        });
-
-        socket.on('player:you_died', ({ reason, timeForLastWords }) => {
-          playHorrorDeathSound();
-          setDeathOverlay({
-            active: true,
-            reason,
-            canWriteLastWords: timeForLastWords > 0,
-            submitted: false
-          });
-        });
-
-        socket.on('night:action_confirmed', () => {
-          setActionConfirmed(true);
-        });
-
-        return () => {
-          socket.off('room:update');
-          socket.off('game:error');
-          socket.off('game:started');
-          socket.off('game:phase_change');
-          socket.off('chat:global:message');
-          socket.off('chat:mafia:message');
-          socket.off('mafia:acquaintance');
-          socket.off('cult:update');
-          socket.off('personal:alert');
-          socket.off('mirror:transformed');
-          socket.off('player:you_died');
-          socket.off('night:action_confirmed');
+      socket.on('player:you_died', ({ reason, timeForLastWords }) => {
+        playHorrorDeathSound();
+        document.body.classList.add('shake');
+        setTimeout(() => document.body.classList.remove('shake'), 700);
+        state.deathOverlay = {
+          active: true,
+          reason: reason || 'Ночное покушение',
+          canWriteLastWords: timeForLastWords > 0,
+          submitted: false
         };
-      }, []);
+        renderDeathOverlay();
+      });
 
-      useEffect(() => {
-        if (timerLeft <= 0) return;
-        const interval = setInterval(() => {
-          setTimerLeft(prev => (prev > 0 ? prev - 1 : 0));
-        }, 1000);
-        return () => clearInterval(interval);
-      }, [timerLeft]);
+      socket.on('night:action_confirmed', () => {
+        state.actionConfirmed = true;
+        renderApp();
+      });
+    }
 
-      useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, [globalMessages]);
-
-      const me = roomData?.players?.find(p => p.id === socket.id);
-      const isAlive = me ? me.isAlive : true;
-      const myRoleInfo = myRole ? ROLES_CATALOG[myRole] : null;
-
-      const createRoom = () => {
-        if (!playerName.trim()) return alert('Введите ваш никнейм!');
-        socket.emit('room:create', { playerName: playerName.trim() }, (res) => {
-          if (res && res.success) {
-            setRoomData(res.room);
-            setRoomIdInput(res.roomId);
-            setScreen('LOBBY');
-          }
-        });
-      };
-
-      const joinRoom = () => {
-        if (!playerName.trim() || !roomIdInput.trim()) return alert('Укажите никнейм и код комнаты!');
-        socket.emit('room:join', { roomId: roomIdInput.trim(), playerName: playerName.trim() }, (res) => {
-          if (res && res.success) {
-            setRoomData(res.room);
-            setScreen('LOBBY');
-          } else {
-            alert(res?.message || 'Ошибка входа');
-          }
-        });
-      };
-
-      const updateDeckCount = (roleKey, delta) => {
-        if (!roomData || roomData.hostId !== socket.id) return;
-        const current = roomData.settings.deck[roleKey] || 0;
-        const nextVal = Math.max(0, current + delta);
-        const newDeck = { ...roomData.settings.deck, [roleKey]: nextVal };
-        socket.emit('room:update_settings', { roomId: roomData.roomId, deck: newDeck });
-      };
-
-      const toggleKamikazeFaction = () => {
-        if (!roomData || roomData.hostId !== socket.id) return;
-        const nextFaction = roomData.settings.kamikazeFaction === 'BLACK' ? 'RED' : 'BLACK';
-        socket.emit('room:update_settings', { roomId: roomData.roomId, kamikazeFaction: nextFaction });
-      };
-
-      const revealCard = () => {
-        if (!isCardFlipped) {
-          playCardFlipSound();
-          setIsCardFlipped(true);
-          socket.emit('player:reveal_card', { roomId: roomData.roomId });
-          setTimeout(() => setScreen('GAME'), 3000);
+    // ==================== ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ ====================
+    window.handleCreateRoom = () => {
+      const nameInput = document.getElementById('input-player-name');
+      if (nameInput) state.playerName = nameInput.value.trim();
+      if (!state.playerName) return alert('Введите ваш никнейм!');
+      socket.emit('room:create', { playerName: state.playerName }, (res) => {
+        if (res && res.success) {
+          state.roomData = res.room;
+          state.roomIdInput = res.roomId;
+          state.screen = 'LOBBY';
+          renderApp();
         }
-      };
+      });
+    };
 
-      const sendGlobalChat = (e) => {
-        e.preventDefault();
-        if (!globalInput.trim()) return;
-        socket.emit('chat:global', { roomId: roomData.roomId, message: globalInput });
-        setGlobalInput('');
-      };
+    window.handleJoinRoom = () => {
+      const nameInput = document.getElementById('input-player-name');
+      const codeInput = document.getElementById('input-room-code');
+      if (nameInput) state.playerName = nameInput.value.trim();
+      if (codeInput) state.roomIdInput = codeInput.value.trim().toUpperCase();
+      if (!state.playerName || !state.roomIdInput) return alert('Укажите никнейм и код комнаты!');
+      socket.emit('room:join', { roomId: state.roomIdInput, playerName: state.playerName }, (res) => {
+        if (res && res.success) {
+          state.roomData = res.room;
+          state.screen = 'LOBBY';
+          renderApp();
+        } else {
+          alert(res?.message || 'Комната не найдена');
+        }
+      });
+    };
 
-      const sendMafiaChat = (e) => {
-        e.preventDefault();
-        if (!mafiaInput.trim()) return;
-        socket.emit('chat:mafia', { roomId: roomData.roomId, message: mafiaInput });
-        setMafiaInput('');
-      };
+    window.copyInviteLink = () => {
+      if (!state.roomData) return;
+      const link = `${window.location.origin}/?room=${state.roomData.roomId}`;
+      navigator.clipboard.writeText(link).then(() => {
+        alert(`Ссылка скопирована: ${link}`);
+      }).catch(() => {
+        prompt('Скопируйте ссылку для друзей:', link);
+      });
+    };
 
-      const submitLastWords = (e) => {
-        e.preventDefault();
-        socket.emit('player:last_words', { roomId: roomData.roomId, message: lastWordsText });
-        setDeathOverlay(prev => ({ ...prev, submitted: true }));
-      };
+    window.updateDeckCount = (roleKey, delta) => {
+      if (!state.roomData || state.roomData.hostId !== socket.id) return;
+      const cur = state.roomData.settings.deck[roleKey] || 0;
+      const nextVal = Math.max(0, cur + delta);
+      const newDeck = { ...state.roomData.settings.deck, [roleKey]: nextVal };
+      socket.emit('room:update_settings', { roomId: state.roomData.roomId, deck: newDeck });
+    };
 
-      const submitNightAction = () => {
-        if (!primaryTarget) return alert('Выберите основную цель!');
-        socket.emit('night:action', {
-          roomId: roomData.roomId,
-          targetId: primaryTarget,
-          secondTargetId: secondaryTarget
-        });
-      };
+    window.toggleKamikazeFaction = () => {
+      if (!state.roomData || state.roomData.hostId !== socket.id) return;
+      const nextF = state.roomData.settings.kamikazeFaction === 'BLACK' ? 'RED' : 'BLACK';
+      socket.emit('room:update_settings', { roomId: state.roomData.roomId, kamikazeFaction: nextF });
+    };
 
-      const submitDayVote = (candidateId) => {
-        setPrimaryTarget(candidateId);
-        socket.emit('day:vote', { roomId: roomData.roomId, targetId: candidateId });
-      };
+    window.startGame = () => {
+      socket.emit('game:start', { roomId: state.roomData.roomId });
+    };
 
-      const submitKamikazeShot = (victimId) => {
-        socket.emit('kamikaze:shoot', { roomId: roomData.roomId, targetId: victimId });
-      };
+    window.flipRoleCard = () => {
+      if (state.isCardFlipped) return;
+      playCardFlipSound();
+      state.isCardFlipped = true;
+      renderApp();
+      socket.emit('player:reveal_card', { roomId: state.roomData.roomId });
+      setTimeout(() => {
+        state.screen = 'GAME';
+        renderApp();
+      }, 3000);
+    };
 
-      const activeRolesInMatch = roomData?.settings?.deck
-        ? Object.entries(roomData.settings.deck).filter(([_, count]) => count > 0)
-        : [];
+    window.openRoleModal = (roleKey) => {
+      state.inspectedRoleKey = roleKey;
+      renderRoleModal();
+    };
 
-      const totalDeckCards = activeRolesInMatch.reduce((sum, [_, count]) => sum + count, 0);
+    window.closeRoleModal = () => {
+      state.inspectedRoleKey = null;
+      renderRoleModal();
+    };
 
-      return (
-        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 md:p-6 ${deathOverlay.active ? 'animate-shake' : ''}`}>
+    window.selectPrimaryTarget = (id) => {
+      state.primaryTarget = id;
+      renderApp();
+    };
 
-          {/* ЭКРАН СМЕРТИ И КАПЛИ КРОВИ */}
-          {deathOverlay.active && (
-            <div className="fixed inset-0 z-50 blood-vignette flex flex-col items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-              {[4, 12, 21, 33, 46, 58, 71, 83, 91, 96].map((leftPos, idx) => (
-                <div
-                  key={idx}
-                  className="blood-drop"
-                  style={{
-                    left: `${leftPos}%`,
-                    height: `${70 + (idx % 3) * 45}px`,
-                    animationDuration: `${2.4 + (idx % 4) * 0.7}s`,
-                    animationDelay: `${(idx % 3) * 0.3}s`
-                  }}
-                />
-              ))}
+    window.selectSecondaryTarget = (id) => {
+      state.secondaryTarget = id;
+      renderApp();
+    };
 
-              <div className="max-w-lg w-full bg-zinc-950/95 border-2 border-red-700 rounded-2xl p-6 md:p-8 shadow-[0_0_80px_rgba(220,38,38,0.65)] text-center space-y-5 relative z-10">
-                <div className="text-red-500 text-5xl animate-pulse">🩸</div>
-                <h2 className="text-4xl md:text-5xl font-black tracking-widest text-red-600 drop-shadow-[0_2px_10px_rgba(220,38,38,0.8)]">
-                  ВЫ УБИТЫ
-                </h2>
-                <p className="text-sm text-red-300/80 uppercase tracking-wider font-semibold">
-                  Причина гибели: {deathOverlay.reason}
-                </p>
+    window.submitNightAction = () => {
+      if (!state.primaryTarget) return alert('Выберите основную цель!');
+      socket.emit('night:action', {
+        roomId: state.roomData.roomId,
+        targetId: state.primaryTarget,
+        secondTargetId: state.secondaryTarget
+      });
+    };
 
-                {deathOverlay.canWriteLastWords && !deathOverlay.submitted ? (
-                  <form onSubmit={submitLastWords} className="space-y-4 pt-2 text-left">
-                    <label className="block text-xs uppercase tracking-wider text-amber-400 font-bold">
-                      ✍️ Предсмертное сообщение городу (осталось {timerLeft} сек):
-                    </label>
-                    <textarea
-                      rows="3"
-                      maxLength="220"
-                      placeholder="Оставьте улики, результаты проверок или последнее слово..."
-                      value={lastWordsText}
-                      onChange={(e) => setLastWordsText(e.target.value)}
-                      className="w-full bg-slate-900 border border-red-800/80 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-red-500"
-                    />
-                    <button
-                      type="submit"
-                      className="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-3 rounded-xl shadow-lg transition"
-                    >
-                      Опубликовать предсмертную записку в чат
-                    </button>
-                  </form>
-                ) : (
-                  <p className="text-xs text-slate-400 bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                    {deathOverlay.submitted
-                      ? 'Ваше последнее слово отправлено в общий чат. Теперь вы безмолвный дух.'
-                      : 'Вы перешли в режим безмолвного Призрака и можете наблюдать за развязкой партии.'}
-                  </p>
-                )}
+    window.submitDayVote = (id) => {
+      state.primaryTarget = id;
+      socket.emit('day:vote', { roomId: state.roomData.roomId, targetId: id });
+      renderApp();
+    };
 
-                <button
-                  onClick={() => setDeathOverlay(prev => ({ ...prev, active: false }))}
-                  className="text-xs text-slate-400 hover:text-white underline pt-2"
-                >
-                  Скрыть багровый экран и наблюдать за столом
-                </button>
+    window.submitKamikazeShot = (id) => {
+      socket.emit('kamikaze:shoot', { roomId: state.roomData.roomId, targetId: id });
+    };
+
+    window.sendGlobalMessage = (e) => {
+      e.preventDefault();
+      const input = document.getElementById('global-chat-input');
+      if (!input || !input.value.trim()) return;
+      socket.emit('chat:global', { roomId: state.roomData.roomId, message: input.value });
+      input.value = '';
+    };
+
+    window.sendMafiaMessage = (e) => {
+      e.preventDefault();
+      const input = document.getElementById('mafia-chat-input');
+      if (!input || !input.value.trim()) return;
+      socket.emit('chat:mafia', { roomId: state.roomData.roomId, message: input.value });
+      input.value = '';
+    };
+
+    window.submitLastWords = (e) => {
+      e.preventDefault();
+      const input = document.getElementById('last-words-input');
+      const text = input ? input.value : '';
+      socket.emit('player:last_words', { roomId: state.roomData.roomId, message: text });
+      state.deathOverlay.submitted = true;
+      renderDeathOverlay();
+    };
+
+    window.closeDeathOverlay = () => {
+      state.deathOverlay.active = false;
+      renderDeathOverlay();
+    };
+
+    // ==================== ОТРИСОВКА МОДАЛЬНОГО ОКНА РОЛИ ====================
+    function renderRoleModal() {
+      const root = document.getElementById('modal-root');
+      const role = state.inspectedRoleKey ? ROLES_CATALOG[state.inspectedRoleKey] : null;
+      if (!role) {
+        root.innerHTML = '';
+        return;
+      }
+      root.innerHTML = `
+        <div class="modal-backdrop" onclick="closeRoleModal()">
+          <div class="card container-sm" onclick="event.stopPropagation()" style="border-color: rgba(245,158,11,0.5);">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:14px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <span style="font-size:36px;">${role.icon}</span>
+                <div>
+                  <h3 style="font-size:20px; font-weight:800;">${role.name}</h3>
+                  <span class="badge ${role.badge}" style="margin-top:4px;">${role.factionLabel}</span>
+                </div>
+              </div>
+              <button onclick="closeRoleModal()" style="background:none; color:var(--muted); font-size:20px; padding:4px 8px;">✕</button>
+            </div>
+            <div style="background:var(--bg-inner); padding:14px; border-radius:12px; border:1px solid var(--border); margin-bottom:12px;">
+              <div style="font-size:11px; font-weight:800; color:var(--amber); text-transform:uppercase; margin-bottom:6px;">Способность и механика:</div>
+              <p style="font-size:14px; line-height:1.5; color:#e2e8f0;">${role.description}</p>
+            </div>
+            <div style="background:var(--bg-inner); padding:14px; border-radius:12px; border:1px solid var(--border); margin-bottom:16px;">
+              <div style="font-size:11px; font-weight:800; color:var(--emerald); text-transform:uppercase; margin-bottom:6px;">Условие победы:</div>
+              <p style="font-size:14px; line-height:1.5; color:#e2e8f0;">${role.winCondition}</p>
+            </div>
+            <button class="btn-primary" onclick="closeRoleModal()">Понятно</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ==================== ОТРИСОВКА ЭКРАНА СМЕРТИ ====================
+    function renderDeathOverlay() {
+      const root = document.getElementById('death-root');
+      if (!state.deathOverlay.active) {
+        root.innerHTML = '';
+        return;
+      }
+      const drops = [5, 14, 23, 35, 48, 60, 72, 84, 93].map((left, i) =>
+        `<div class="blood-drop" style="left:${left}%; height:${80 + (i \% 3) * 45}px; animation-duration:${2.3 + (i % 4) * 0.6}s;"></div>`
+      ).join('');
+
+      root.innerHTML = `
+        <div class="death-backdrop">
+          ${drops}
+          <div class="card container-sm" style="border:2px solid #dc2626; background:#090508; text-align:center; position:relative; z-index:96;">
+            <div style="font-size:48px; margin-bottom:8px;">🩸</div>
+            <h2 style="font-size:38px; font-weight:900; color:#ef4444; letter-spacing:3px; margin-bottom:6px;">ВЫ УБИТЫ</h2>
+            <p style="font-size:13px; color:#fca5a5; text-transform:uppercase; font-weight:700; margin-bottom:18px;">
+              Причина: ${state.deathOverlay.reason}
+            </p>
+            ${state.deathOverlay.canWriteLastWords && !state.deathOverlay.submitted ? `
+              <form onsubmit="submitLastWords(event)" style="text-align:left; display:flex; flex-direction:column; gap:10px; margin-bottom:14px;">
+                <label style="font-size:12px; font-weight:800; color:var(--amber); text-transform:uppercase;">
+                  ✍️ Оставьте предсмертное послание городу:
+                </label>
+                <textarea id="last-words-input" rows="3" maxlength="220" placeholder="Напишите улики, результаты ночных проверок или последнее слово..."></textarea>
+                <button type="submit" class="btn-primary" style="background:#dc2626; color:#fff;">Опубликовать предсмертную записку в чат</button>
+              </form>
+            ` : `
+              <p style="font-size:13px; color:var(--muted); background:var(--bg-inner); padding:12px; border-radius:10px; margin-bottom:14px;">
+                ${state.deathOverlay.submitted ? 'Ваше предсмертное послание опубликовано в общем чате.' : 'Вы перешли в режим Призрака и можете наблюдать за игрой.'}
+              </p>
+            `}
+            <button onclick="closeDeathOverlay()" style="background:none; color:var(--muted); text-decoration:underline; font-size:13px;">
+              Скрыть багровый экран и смотреть за столом
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ==================== ГЛАВНЫЙ РЕНДЕР ЭКРАНОВ ====================
+    function renderApp() {
+      const app = document.getElementById('app');
+      if (!app) return;
+
+      // 1. ЭКРАН ВХОДА
+      if (state.screen === 'JOIN') {
+        app.innerHTML = `
+          <div class="card container-sm" style="display:flex; flex-direction:column; gap:18px;">
+            <div style="text-align:center;">
+              <span class="badge badge-orange" style="margin-bottom:8px;">Extended Edition • 16 Ролей</span>
+              <h1 style="font-size:28px; font-weight:900; color:var(--amber); letter-spacing:1px;">МАФИЯ ONLINE</h1>
+              <p style="font-size:13px; color:var(--muted); margin-top:4px;">Оригинальные карточки, Секта, Некромант, Кукловод и Предсмертные записки</p>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              <input id="input-player-name" type="text" placeholder="Ваш игровой никнейм" value="${state.playerName}" />
+              <input id="input-room-code" type="text" placeholder="Код комнаты (если пригласил друг)" value="${state.roomIdInput}" style="text-transform:uppercase;" />
+              <button class="btn-secondary" onclick="handleJoinRoom()">Войти по коду комнаты</button>
+              <div style="text-align:center; font-size:12px; color:var(--muted); text-transform:uppercase;">— или —</div>
+              <button class="btn-primary" onclick="handleCreateRoom()">Создать новую комнату (Хост)</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      const room = state.roomData;
+      if (!room) return;
+
+      const activeRoles = Object.entries(room.settings.deck).filter(([_, c]) => c > 0);
+      const totalDeckCards = activeRoles.reduce((sum, [_, c]) => sum + c, 0);
+      const isHost = room.hostId === socket.id;
+
+      // 2. ЭКРАН ЛОББИ
+      if (state.screen === 'LOBBY') {
+        const playersHtml = room.players.map(p => `
+          <div style="background:var(--bg-inner); padding:10px 14px; border-radius:10px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; font-size:14px;">
+            <span><b>${p.name}</b>${p.id === socket.id ? '(Вы)' : ''}</span>
+            ${p.isHost ? '<span class="badge badge-orange">Ведущий</span>' : ''}
+          </div>
+        `).join('');
+
+        const deckBuilderHtml = Object.entries(ROLES_CATALOG).map(([key, info]) => {
+          const count = room.settings.deck[key] || 0;
+          return `
+            <div style="background:var(--bg-inner); padding:12px; border-radius:12px; border:1px solid ${count > 0 ? 'rgba(245,158,11,0.45)' : 'var(--border)'}; display:flex; justify-content:space-between; align-items:center; opacity:${count > 0 ? '1' : '0.6'};">
+              <div onclick="openRoleModal('${key}')" style="cursor:pointer; display:flex; align-items:center; gap:10px;">
+                <span style="font-size:24px;">${info.icon}</span>
+                <div>
+                  <div style="font-size:14px; font-weight:700; text-decoration:underline dotted; color:var(--text);">${info.name}</div>
+                  <div style="font-size:11px; color:var(--muted);">${info.factionLabel}</div>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                ${isHost ? `<button onclick="updateDeckCount('${key}', -1)" style="width:28px; height:28px; border-radius:8px; background:#1e293b; color:#fff; font-weight:800;">-</button>` : ''}
+                <span style="font-weight:800; color:var(--amber); min-width:20px; text-align:center;">${count}</span>${isHost ? `<button onclick="updateDeckCount('${key}', 1)" style="width:28px; height:28px; border-radius:8px; background:#1e293b; color:#fff; font-weight:800;">+</button>` : ''}
               </div>
             </div>
-          )}
+          `;
+        }).join('');
 
-          {/* МОДАЛЬНОЕ ОКНО СПРАВОЧНИКА РОЛИ */}
-          {inspectedRoleKey && ROLES_CATALOG[inspectedRoleKey] && (
-            <div
-              onClick={() => setInspectedRoleKey(null)}
-              className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
-            >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="max-w-md w-full bg-slate-900 border border-amber-500/40 rounded-2xl p-6 shadow-2xl space-y-4"
-              >
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-4xl">{ROLES_CATALOG[inspectedRoleKey].icon}</span>
-                    <div>
-                      <h3 className="text-xl font-bold text-white">{ROLES_CATALOG[inspectedRoleKey].name}</h3>
-                      <span className={`inline-block text-xs px-2.5 py-0.5 rounded-full border mt-1 ${ROLES_CATALOG[inspectedRoleKey].badgeClass}`}>
-                        {ROLES_CATALOG[inspectedRoleKey].factionLabel}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setInspectedRoleKey(null)}
-                    className="text-slate-400 hover:text-white text-xl font-bold px-2"
-                  >
-                    ✕
-                  </button>
-                </div>
-
-                <div className="space-y-3 text-sm leading-relaxed">
-                  <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
-                    <div className="text-xs uppercase tracking-wider text-amber-400 font-bold mb-1">Способность и механика:</div>
-                    <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].description}</p>
-                  </div>
-                  <div className="bg-slate-950/90 p-3.5 rounded-xl border border-slate-800">
-                    <div className="text-xs uppercase tracking-wider text-emerald-400 font-bold mb-1">Условие победы:</div>
-                    <p className="text-slate-200">{ROLES_CATALOG[inspectedRoleKey].winCondition}</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => setInspectedRoleKey(null)}
-                  className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl transition"
-                >
-                  Понятно
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ЭКРАН 1: ВХОД */}
-          {screen === 'JOIN' && (
-            <div className="my-auto max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6 animate-fade-in">
-              <div className="text-center space-y-1">
-                <span className="text-xs uppercase tracking-widest px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  Extended Edition • 16 Ролей
-                </span>
-                <h1 className="text-3xl font-extrabold tracking-wider text-amber-500 pt-2">МАФИЯ ONLINE</h1>
-                <p className="text-xs text-slate-400">Карточная механика, Секта, Некромант, Кукловод и Предсмертные записки</p>
-              </div>
-
-              <div className="space-y-4">
-                <input
-                  type="text"
-                  placeholder="Ваш игровой никнейм"
-                  value={playerName}
-                  onChange={e => setPlayerName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-500"
-                />
-                <input
-                  type="text"
-                  placeholder="Код комнаты (если пригласил друг)"
-                  value={roomIdInput}
-                  onChange={e => setRoomIdInput(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 uppercase focus:outline-none focus:border-amber-500"
-                />
-                <button
-                  onClick={joinRoom}
-                  className="w-full bg-slate-800 hover:bg-slate-700 font-semibold py-3 rounded-xl transition"
-                >
-                  Войти по коду комнаты
-                </button>
-                <div className="relative flex py-1 items-center">
-                  <div className="flex-grow border-t border-slate-800"></div>
-                  <span className="flex-shrink mx-3 text-slate-500 text-xs uppercase">или</span>
-                  <div className="flex-grow border-t border-slate-800"></div>
-                </div>
-                <button
-                  onClick={createRoom}
-                  className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg"
-                >
-                  Создать новое лобби (Хост)
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ЭКРАН 2: ЛОББИ */}
-          {screen === 'LOBBY' && roomData && (
-            <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-3 gap-6 my-auto animate-fade-in">
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-5 flex flex-col justify-between">
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-                    <div>
-                      <span className="text-xs text-amber-500 font-bold uppercase">Код приглашения</span>
-                      <h2 className="text-3xl font-mono font-black tracking-wider text-white">{roomData.roomId}</h2>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-xs text-slate-400">Игроков / Карт</span>
-                      <p className={`text-xl font-bold ${roomData.players.length === totalDeckCards ? 'text-emerald-400' : 'text-amber-400'}`}>
-                        {roomData.players.length} / {totalDeckCards}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Участники за столом:</h3>
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
-                      {roomData.players.map(p => (
-                        <div key={p.id} className="bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-800 flex justify-between items-center text-sm">
-                          <span className="font-medium">{p.name} {p.id === socket.id && '(Вы)'}</span>
-                          {p.isHost && <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-semibold">Ведущий</span>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {roomData.hostId === socket.id ? (
-                  <button
-                    onClick={() => socket.emit('game:start', { roomId: roomData.roomId })}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl transition shadow-lg"
-                  >
-                    🚀 Раздать карточки и начать ({totalDeckCards})
-                  </button>
-                ) : (
-                  <div className="text-center text-xs text-slate-400 bg-slate-950 p-3 rounded-xl border border-slate-800">
-                    Ожидаем, пока хост настроит колоду и запустит партию...
-                  </div>
-                )}
-              </div>
-
-              <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
-                <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
+        app.innerHTML = `
+          <div class="container-lg grid-lobby" style="margin:auto;">
+            <div class="card" style="display:flex; flex-direction:column; justify-content:space-between; gap:16px;">
+              <div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:14px;">
                   <div>
-                    <h3 className="text-lg font-bold text-white">Настройка колоды ролей</h3>
-                    <p className="text-xs text-slate-400">Нажмите на название любой роли, чтобы прочитать её правила и условия победы</p>
+                    <div style="font-size:11px; color:var(--amber); font-weight:800; text-transform:uppercase;">Код комнаты</div>
+                    <div style="font-size:28px; font-weight:900; letter-spacing:2px;">${room.roomId}</div>
                   </div>
-                  <button
-                    onClick={toggleKamikazeFaction}
-                    className="text-xs px-3 py-1.5 rounded-lg border border-orange-500/40 bg-orange-950/40 text-orange-300 hover:bg-orange-900/50 transition"
-                  >
-                    Фракция Камикадзе: {roomData.settings.kamikazeFaction === 'BLACK' ? 'ЧЕРНЫЙ (За Мафию)' : 'КРАСНЫЙ (За Мирных)'}
-                  </button>
+                  <div style="text-align:right;">
+                    <div style="font-size:11px; color:var(--muted);">Игроков / Карт</div>
+                    <div style="font-size:20px; font-weight:800; color:${room.players.length === totalDeckCards ? 'var(--emerald)' : 'var(--amber)'};">
+                      ${room.players.length} /${totalDeckCards}
+                    </div>
+                  </div>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[430px] overflow-y-auto pr-1">
-                  {Object.entries(ROLES_CATALOG).map(([roleKey, info]) => {
-                    const count = roomData.settings.deck[roleKey] || 0;
-                    const isHost = roomData.hostId === socket.id;
-                    return (
-                      <div
-                        key={roleKey}
-                        className={`p-3 rounded-xl border flex items-center justify-between transition ${
-                          count > 0 ? 'bg-slate-950 border-amber-500/40' : 'bg-slate-950/40 border-slate-800/80 opacity-65'
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setInspectedRoleKey(roleKey)}
-                          className="flex items-center gap-2.5 text-left group"
-                        >
-                          <span className="text-2xl">{info.icon}</span>
-                          <div>
-                            <div className="text-sm font-bold text-slate-100 group-hover:text-amber-400 underline decoration-dotted underline-offset-4">
-                              {info.name}
-                            </div>
-                            <div className="text-[11px] text-slate-400">{info.factionLabel}</div>
-                          </div>
-                        </button>
-
-                        <div className="flex items-center gap-2">
-                          {isHost && (
-                            <button
-                              onClick={() => updateDeckCount(roleKey, -1)}
-                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold text-sm"
-                            >
-                              -
-                            </button>
-                          )}
-                          <span className="w-6 text-center font-mono font-bold text-amber-400">{count}</span>
-                          {isHost && (
-                            <button
-                              onClick={() => updateDeckCount(roleKey, 1)}
-                              className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold text-sm"
-                            >
-                              +
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <button class="btn-secondary" onclick="copyInviteLink()" style="margin-bottom:14px; font-size:13px; padding:10px;">
+                  🔗 Скопировать ссылку-приглашение
+                </button>
+                <div style="font-size:12px; color:var(--muted); font-weight:700; text-transform:uppercase; margin-bottom:8px;">Участники:</div>
+                <div style="display:flex; flex-direction:column; gap:8px; max-height:240px; overflow-y:auto;">${playersHtml}</div>
               </div>
+              ${isHost ? `
+                <button class="btn-emerald" onclick="startGame()">🚀 Раздать карты и начать (${totalDeckCards})</button>
+              ` : `
+                <div style="text-align:center; font-size:13px; color:var(--muted); padding:12px; background:var(--bg-inner); border-radius:12px;">
+                  Ожидаем запуска игры ведущим...
+                </div>
+              `}
             </div>
-          )}
 
-          {/* ЭКРАН 3: 3D-ВСКРЫТИЕ КАРТОЧКИ РОЛИ НА ЧИСТОМ CSS */}
-          {screen === 'REVEAL' && myRoleInfo && (
-            <div className="my-auto flex flex-col items-center justify-center space-y-6 animate-fade-in">
-              <h2 className="text-2xl font-bold tracking-wide text-amber-400">Ваша секретная карта роли</h2>
-              <div className="perspective-1000 w-72 h-96 cursor-pointer" onClick={revealCard}>
-                <div
-                  className="w-full h-full relative preserve-3d rounded-2xl shadow-2xl"
-                  style={{ transform: isCardFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
-                >
-                  <div className="absolute inset-0 w-full h-full backface-hidden bg-gradient-to-br from-slate-900 to-zinc-950 rounded-2xl flex flex-col items-center justify-center border-4 border-amber-500/40 p-6 text-center">
-                    <span className="text-6xl mb-4 text-amber-500">♠</span>
-                    <p className="text-amber-200 font-bold tracking-widest text-sm uppercase">Тапните по карте, чтобы вскрыть</p>
-                    <p className="text-xs text-slate-500 mt-2">Игра начнется, когда все участники посмотрят свои карты</p>
-                  </div>
-
-                  <div className="absolute inset-0 w-full h-full backface-hidden rotateY-180 bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-900 rounded-2xl p-6 flex flex-col items-center justify-between border-4 border-amber-500">
-                    <div className="text-center">
-                      <span className="text-4xl">{myRoleInfo.icon}</span>
-                      <h3 className="text-2xl font-extrabold uppercase text-white mt-2">{myRoleInfo.name}</h3>
-                      <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full border mt-1 ${myRoleInfo.badgeClass}`}>
-                        {myRoleInfo.factionLabel}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-300 text-center bg-slate-900/90 p-3 rounded-xl border border-slate-800 leading-relaxed">
-                      {myRoleInfo.description}
-                    </p>
-                    <span className="text-[11px] text-amber-400">Карта убирается в ваш личный карман</span>
-                  </div>
+            <div class="card">
+              <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:14px;">
+                <div>
+                  <h3 style="font-size:18px; font-weight:800;">Настройка колоды ролей</h3>
+                  <p style="font-size:12px; color:var(--muted);">Нажмите на название любой роли, чтобы открыть описание её способностей</p>
                 </div>
+                <button onclick="toggleKamikazeFaction()" class="badge badge-orange" style="cursor:pointer;">
+                  Камикадзе: ${room.settings.kamikazeFaction === 'BLACK' ? 'ЧЕРНЫЙ (За Мафию)' : 'КРАСНЫЙ (За Город)'}
+                </button>
               </div>
+              <div class="roles-grid">${deckBuilderHtml}</div>
             </div>
-          )}
+          </div>
+        `;
+        return;
+      }
 
-          {/* ЭКРАН 4: ОСНОВНОЙ ИГРОВОЙ СТОЛ */}
-          {screen === 'GAME' && roomData && (
-            <div className="max-w-6xl w-full space-y-4 animate-fade-in">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold text-sm">
-                    Раунд {phaseInfo.round || 1} • {phaseInfo.status}
-                  </div>
-                  <p className="text-sm text-slate-200 font-medium">{phaseInfo.message}</p>
+      const myRoleInfo = state.myRole ? ROLES_CATALOG[state.myRole] : ROLES_CATALOG.civilian;
+
+      // 3. ЭКРАН 3D-ВСКРЫТИЯ КАРТОЧКИ РОЛИ
+      if (state.screen === 'REVEAL') {
+        app.innerHTML = `
+          <div style="margin:auto; text-align:center;">
+            <h2 style="font-size:24px; font-weight:800; color:var(--amber); margin-bottom:8px;">Ваша секретная карта роли</h2>
+            <p style="font-size:13px; color:var(--muted);">Нажмите на карту, чтобы перевернуть её</p>
+            <div class="perspective-1000" onclick="flipRoleCard()">
+              <div class="card-3d-inner ${state.isCardFlipped ? 'flipped' : ''}">
+                <div class="card-face card-front">
+                  <div style="font-size:64px; color:var(--amber); margin-bottom:12px;">♠</div>
+                  <div style="font-weight:800; color:#fde68a; letter-spacing:2px; font-size:14px;">ТАПНИТЕ, ЧТОБЫ ВСКРЫТЬ</div>
                 </div>
-
-                <div className="flex items-center gap-3">
-                  {timerLeft > 0 && (
-                    <div className="px-3.5 py-1.5 rounded-xl bg-slate-950 border border-slate-700 font-mono font-bold text-amber-400 text-sm">
-                      ⏱ {timerLeft} сек
-                    </div>
-                  )}
-                  {myRoleInfo && (
-                    <button
-                      onClick={() => setInspectedRoleKey(myRole)}
-                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5 transition"
-                    >
-                      <span>{myRoleInfo.icon}</span> Моя карта: {myRoleInfo.name}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* ЗАКРЕПЛЕННАЯ ИНТЕРАКТИВНАЯ ПАНЕЛЬ РОЛЕЙ */}
-              <div className="bg-slate-900/95 border border-amber-500/30 rounded-2xl p-3.5 shadow-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                    📌 Роли в текущей партии (нажмите на любую роль для просмотра правил):
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {activeRolesInMatch.map(([roleKey, count]) => {
-                    const info = ROLES_CATALOG[roleKey];
-                    if (!info) return null;
-                    return (
-                      <button
-                        key={roleKey}
-                        onClick={() => setInspectedRoleKey(roleKey)}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 hover:scale-105 transition ${info.badgeClass}`}
-                      >
-                        <span>{info.icon}</span>
-                        <span>{info.name}</span>
-                        <span className="opacity-75 font-mono">×{count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                <div className="space-y-4">
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
-                      Игроки за столом ({roomData.players.filter(p => p.isAlive).length} живы)
-                    </h3>
-
-                    <div className="space-y-2">
-                      {roomData.players.map(p => (
-                        <div
-                          key={p.id}
-                          className={`p-3 rounded-xl border flex justify-between items-center transition ${
-                            p.isAlive
-                              ? 'bg-slate-950 border-slate-800'
-                              : 'bg-red-950/20 border-red-900/40 opacity-60'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-sm">{p.name}</span>
-                            {p.id === socket.id && <span className="text-[11px] text-amber-400">(Вы)</span>}
-                            {cultMembers.includes(p.name) && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-fuchsia-950 text-fuchsia-300 border border-fuchsia-700/50">
-                                🕯️ Секта
-                              </span>
-                            )}
-                            {mafiaTeam.some(m => m.id === p.id) && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-950 text-red-300 border border-red-700/50">
-                                🦹‍♂️ Мафия
-                              </span>
-                            )}
-                          </div>
-                          <span className={`text-xs font-bold ${p.isAlive ? 'text-emerald-400' : 'text-red-500'}`}>
-                            {p.isAlive ? 'Жив' : '💀 Мертв'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {personalAlerts.length > 0 && (
-                    <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-4 space-y-2">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400">Секретные сводки для вас:</h4>
-                      <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                        {personalAlerts.map(a => (
-                          <div key={a.id} className="text-xs bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-amber-200">
-                            {a.text}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="lg:col-span-2 space-y-5">
-                  {phaseInfo.status === 'KAMIKAZE_REVENGE' && roomData.kamikazeActorId === socket.id && (
-                    <div className="bg-orange-950/40 border-2 border-orange-500 rounded-2xl p-5 space-y-4 animate-pulse">
-                      <h3 className="text-lg font-extrabold text-orange-400">
-                        💣 ПОСЛЕДНЕЕ СЛОВО КАМИКАДЗЕ: Выберите, кого забрать с собой!
-                      </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {roomData.players.filter(p => p.isAlive).map(p => (
-                          <button
-                            key={p.id}
-                            onClick={() => submitKamikazeShot(p.id)}
-                            className="p-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-slate-950 font-bold text-sm transition"
-                          >
-                            💥 Взорвать {p.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {phaseInfo.status === 'VOTING' && isAlive && (
-                    <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-5 space-y-3">
-                      <h3 className="text-sm font-bold uppercase tracking-wider text-amber-400">
-                        ⚖️ Дневное голосование (выберите подозреваемого на казнь):
-                      </h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {roomData.players.filter(p => p.isAlive).map(p => (
-                          <button
-                            key={p.id}
-                            onClick={() => submitDayVote(p.id)}
-                            className={`p-3 rounded-xl border text-sm font-semibold transition ${
-                              primaryTarget === p.id
-                                ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                                : 'bg-slate-950 border-slate-800 hover:border-slate-700'
-                            }`}
-                          >
-                            {p.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {phaseInfo.status === 'NIGHT' && isAlive && myRoleInfo && myRoleInfo.targetMode !== 'NONE' && (
-                    <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-5 space-y-4">
-                      <div className="flex justify-between items-center">
-                        <h3 className="text-sm font-bold uppercase tracking-wider text-indigo-300">
-                          🌙 Ночной ход вашей роли: {myRoleInfo.icon} {myRoleInfo.name}
-                        </h3>
-                        {actionConfirmed && (
-                          <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700/50">
-                            ✓ Выбор принят
-                          </span>
-                        )}
-                      </div>
-
-                      {myRole === 'mirror' && phaseInfo.round > 1 ? (
-                        <p className="text-xs text-slate-400">
-                          Вы уже выбрали донора в первую ночь. Ожидайте его судьбы.
-                        </p>
-                      ) : (
-                        <>
-                          <div className="space-y-2">
-                            <span className="text-xs text-slate-400 font-semibold">
-                              {myRole === 'necromancer'
-                                ? '1. Выберите погибшего игрока, чью способность хотите воскресить:'
-                                : myRole === 'puppeteer'
-                                ? '1. Выберите Марионетку (и
+                <div class="card-face card-back">
+                  <div>
+                    <div style="font-size:44px;">${myRoleInfo.icon}</div>
+                    <h3 style="font-size:22px; font-weight:90
