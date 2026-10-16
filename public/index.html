@@ -4,13 +4,39 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Мафия Online — Расширенное Издание</title>
+  <script>try{if(localStorage.getItem('mafia_theme')==='light')document.documentElement.classList.add('light');}catch(e){}</script>
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script>
+    (function () {
+      var shades = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+      var c = { slate: {}, zinc: {} };
+      ['slate', 'zinc'].forEach(function (n) {
+        shades.forEach(function (s) { c[n][s] = 'rgb(var(--' + n + '-' + s + ') / <alpha-value>)'; });
+      });
+      tailwind.config = { theme: { extend: { colors: c } } };
+    })();
+  </script>
   <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
 
   <style>
+    :root { --slate-50:248 250 252;--slate-100:241 245 249;--slate-200:226 232 240;--slate-300:203 213 225;--slate-400:148 163 184;--slate-500:100 116 139;--slate-600:71 85 105;--slate-700:51 65 85;--slate-800:30 41 59;--slate-900:15 23 42;--slate-950:2 6 23;
+      --zinc-50:250 250 250;--zinc-100:244 244 245;--zinc-200:228 228 231;--zinc-300:212 212 216;--zinc-400:161 161 170;--zinc-500:113 113 122;--zinc-600:82 82 91;--zinc-700:63 63 70;--zinc-800:39 39 42;--zinc-900:24 24 27;--zinc-950:9 9 11; }
+    html.light { --slate-50:2 6 23;--slate-100:15 23 42;--slate-200:30 41 59;--slate-300:51 65 85;--slate-400:71 85 105;--slate-500:100 116 139;--slate-600:148 163 184;--slate-700:203 213 225;--slate-800:226 232 240;--slate-900:255 255 255;--slate-950:241 245 249;
+      --zinc-50:9 9 11;--zinc-100:24 24 27;--zinc-200:39 39 42;--zinc-300:63 63 70;--zinc-400:82 82 91;--zinc-500:113 113 122;--zinc-600:161 161 170;--zinc-700:212 212 216;--zinc-800:228 228 231;--zinc-900:255 255 255;--zinc-950:244 244 245; color-scheme: light; }
+    /* Элементы, которые остаются тёмными в любой теме */
+    html .keep-dark, html.light .keep-dark { --slate-50:248 250 252;--slate-100:241 245 249;--slate-200:226 232 240;--slate-300:203 213 225;--slate-400:148 163 184;--slate-500:100 116 139;--slate-600:71 85 105;--slate-700:51 65 85;--slate-800:30 41 59;--slate-900:15 23 42;--slate-950:2 6 23;
+      --zinc-50:250 250 250;--zinc-100:244 244 245;--zinc-200:228 228 231;--zinc-300:212 212 216;--zinc-400:161 161 170;--zinc-500:113 113 122;--zinc-600:82 82 91;--zinc-700:63 63 70;--zinc-800:39 39 42;--zinc-900:24 24 27;--zinc-950:9 9 11; }
+    /* Читаемые акцентные цвета текста на светлой теме */
+    html.light [class*="text-amber-"]:not([class*="-950"]):not([class*="hover:"]):not(.keep-dark *) { color: #b45309; }
+    html.light [class*="text-emerald-"]:not([class*="-950"]):not(.keep-dark *) { color: #047857; }
+    html.light [class*="text-red-"]:not([class*="-950"]):not(.keep-dark *) { color: #b91c1c; }
+    html.light [class*="text-indigo-"]:not([class*="-950"]):not(.keep-dark *) { color: #4338ca; }
+    html.light [class*="text-orange-"]:not([class*="-950"]):not(.keep-dark *) { color: #c2410c; }
+    html.light body { background: rgb(241 245 249); }
+    body { transition: background-color .3s; }
     .perspective-1000 { perspective: 1000px; }
     .preserve-3d { transform-style: preserve-3d; }
     .backface-hidden { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
@@ -212,6 +238,137 @@
       } catch (e) {}
     }
 
+    // ---------- Фоновая музыка (генеративная, Web Audio) ----------
+    const music = {
+      ctx: null, master: null, fxIn: null, bus: null, timer: null,
+      nextTime: 0, bar: 0, playing: false,
+      chords: [
+        { bass: 110.00, notes: [220.00, 261.63, 329.63] }, // Am
+        { bass: 87.31,  notes: [174.61, 220.00, 261.63] }, // F
+        { bass: 130.81, notes: [261.63, 329.63, 392.00] }, // C
+        { bass: 98.00,  notes: [196.00, 246.94, 293.66] }  // G
+      ],
+      scale: [440.00, 523.25, 587.33, 659.25, 783.99, 880.00],
+      init() {
+        if (this.master) return;
+        const ctx = getAudioContext();
+        this.ctx = ctx;
+        this.master = ctx.createGain();
+        this.master.gain.value = 0.3;
+        this.master.connect(ctx.destination);
+        this.fxIn = ctx.createGain();
+        this.fxIn.connect(this.master);
+        const conv = ctx.createConvolver();
+        const len = Math.floor(ctx.sampleRate * 3);
+        const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = ir.getChannelData(ch);
+          for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+        }
+        conv.buffer = ir;
+        const wet = ctx.createGain();
+        wet.gain.value = 0.45;
+        this.fxIn.connect(conv); conv.connect(wet); wet.connect(this.master);
+      },
+      start() {
+        if (this.playing) return;
+        try { this.init(); } catch (e) { return; }
+        const ctx = this.ctx;
+        if (ctx.state === 'suspended') ctx.resume();
+        this.playing = true;
+        this.bus = ctx.createGain();
+        this.bus.gain.value = 0.0001;
+        this.bus.connect(this.fxIn);
+        this.bus.gain.setTargetAtTime(1, ctx.currentTime, 1.0);
+        this.nextTime = ctx.currentTime + 0.2;
+        this.schedule();
+        this.timer = setInterval(() => this.schedule(), 500);
+      },
+      stop() {
+        if (!this.playing) return;
+        this.playing = false;
+        clearInterval(this.timer);
+        const bus = this.bus;
+        bus.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.2);
+        setTimeout(() => { try { bus.disconnect(); } catch (e) {} }, 1500);
+      },
+      schedule() {
+        if (!this.playing) return;
+        const barLen = (60 / 66) * 4;
+        if (this.nextTime < this.ctx.currentTime) this.nextTime = this.ctx.currentTime + 0.1;
+        while (this.nextTime < this.ctx.currentTime + 3) {
+          this.playBar(this.nextTime, barLen);
+          this.nextTime += barLen;
+          this.bar++;
+        }
+      },
+      tone(type, freq, start, dur, vol, attack, release, lp) {
+        const ctx = this.ctx;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type;
+        o.frequency.value = freq;
+        let node = o;
+        if (lp) {
+          const f = ctx.createBiquadFilter();
+          f.type = 'lowpass'; f.frequency.value = lp;
+          o.connect(f); node = f;
+        }
+        node.connect(g); g.connect(this.bus);
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.linearRampToValueAtTime(vol, start + attack);
+        g.gain.setValueAtTime(vol, start + Math.max(attack, dur));
+        g.gain.exponentialRampToValueAtTime(0.0001, start + dur + release);
+        o.start(start);
+        o.stop(start + dur + release + 0.1);
+      },
+      pluck(freq, start, vol) {
+        const ctx = this.ctx;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.value = freq;
+        o.connect(g); g.connect(this.bus);
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.linearRampToValueAtTime(vol, start + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + 1.6);
+        o.start(start);
+        o.stop(start + 1.7);
+      },
+      playBar(t, barLen) {
+        const ch = this.chords[this.bar % 4];
+        const beat = barLen / 4;
+        // бас
+        this.tone('sine', ch.bass, t, barLen, 0.22, 0.05, 0.9);
+        // мягкий пэд
+        ch.notes.forEach((f, i) => {
+          this.tone('triangle', f * (i % 2 ? 1.002 : 0.998), t, barLen, 0.06, 1.2, 1.4, 900);
+          this.tone('sine', f * 2, t, barLen, 0.02, 1.4, 1.4);
+        });
+        // арпеджио
+        const pool = [ch.notes[0] * 2, ch.notes[1] * 2, ch.notes[2] * 2, ch.notes[0] * 4];
+        [0, 1, 2, 3, 2, 1, 2, 1].forEach((p, i) => {
+          if (Math.random() < 0.2) return;
+          this.pluck(pool[p], t + (i * beat) / 2, 0.08);
+        });
+        // певучая мелодия
+        if (Math.random() < 0.65) {
+          const f = this.scale[Math.floor(Math.random() * this.scale.length)];
+          const at = t + (Math.random() < 0.5 ? 0 : beat * 2);
+          this.tone('sine', f, at, beat * 2, 0.06, 0.1, 1.6);
+        }
+      }
+    };
+
+    const readLS = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+    const writeLS = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+
+    const GUIDE_GROUPS = [
+      { title: '🟢 Мирный город', roles: ['civilian', 'lucky', 'commissar', 'doctor', 'hooker', 'hobo', 'journalist'] },
+      { title: '🔴 Синдикат Мафии', roles: ['mafia', 'don', 'instigator'] },
+      { title: '🟣 Нейтралы и особые роли', roles: ['kamikaze', 'suicider', 'necromancer', 'cultist', 'puppeteer', 'mirror'] }
+    ];
+
     // ---------- Приложение ----------
     function App() {
       const [screen, setScreen] = useState('JOIN');
@@ -240,6 +397,10 @@
       const [deathOverlay, setDeathOverlay] = useState({ active: false, reason: '', canWriteLastWords: false, submitted: false });
       const [lastWordsText, setLastWordsText] = useState('');
       const [gameOver, setGameOver] = useState(null);
+      const [showRolesGuide, setShowRolesGuide] = useState(false);
+      const [theme, setTheme] = useState(() => (readLS('mafia_theme', 'dark') === 'light' ? 'light' : 'dark'));
+      const [isMuted, setIsMuted] = useState(() => readLS('mafia_muted', '0') === '1');
+      const mutedRef = useRef(isMuted);
 
       const chatEndRef = useRef(null);
       const revealTimeoutRef = useRef(null);
@@ -327,6 +488,32 @@
       useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, [globalMessages]);
+
+      // Тема: по умолчанию тёмная
+      useEffect(() => {
+        document.documentElement.classList.toggle('light', theme === 'light');
+        writeLS('mafia_theme', theme);
+      }, [theme]);
+
+      // Музыка стартует после первого действия пользователя (требование браузеров)
+      useEffect(() => {
+        const kick = () => { if (!mutedRef.current) music.start(); };
+        window.addEventListener('pointerdown', kick, { once: true });
+        window.addEventListener('keydown', kick, { once: true });
+        return () => {
+          window.removeEventListener('pointerdown', kick);
+          window.removeEventListener('keydown', kick);
+        };
+      }, []);
+
+      const toggleTheme = () => setTheme(t => (t === 'dark' ? 'light' : 'dark'));
+      const toggleMusic = () => {
+        const next = !isMuted;
+        setIsMuted(next);
+        mutedRef.current = next;
+        writeLS('mafia_muted', next ? '1' : '0');
+        if (next) music.stop(); else music.start();
+      };
 
       const me = roomData?.players?.find(p => p.id === socket.id);
       const isAlive = me ? me.isAlive : true;
@@ -452,7 +639,70 @@
         : '2. Кого проверить на роль Комиссара (необязательно):';
 
       return (
-        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 md:p-6 ${deathOverlay.active ? 'animate-shake' : ''}`}>
+        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 md:p-6 md:pt-16 ${deathOverlay.active ? 'animate-shake' : ''}`}>
+
+          {/* ===== Панель в углу: роли / тема / музыка ===== */}
+          <div className="fixed top-3 right-3 z-[70] flex items-center gap-2">
+            <button onClick={() => setShowRolesGuide(true)} title="Все роли и их способности"
+              className="h-10 px-3 rounded-xl bg-slate-900/90 border border-slate-700 text-sm font-semibold text-slate-100 hover:bg-slate-800 backdrop-blur flex items-center gap-1.5 shadow-lg transition">
+              <span>📖</span><span className="hidden sm:inline">Роли</span>
+            </button>
+            <button onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+              className="h-10 w-10 rounded-xl bg-slate-900/90 border border-slate-700 text-lg hover:bg-slate-800 backdrop-blur shadow-lg transition">
+              {theme === 'dark' ? '☀️' : '🌙'}
+            </button>
+            <button onClick={toggleMusic} title={isMuted ? 'Включить музыку' : 'Выключить музыку'}
+              className="h-10 w-10 rounded-xl bg-slate-900/90 border border-slate-700 text-lg hover:bg-slate-800 backdrop-blur shadow-lg transition">
+              {isMuted ? '🔇' : '🔊'}
+            </button>
+          </div>
+
+          {/* ===== Справочник всех ролей ===== */}
+          {showRolesGuide && (
+            <div onClick={() => setShowRolesGuide(false)}
+              className="fixed inset-0 z-[65] bg-black/75 backdrop-blur-sm flex items-start justify-center p-3 pt-16 fade-in">
+              <div onClick={(e) => e.stopPropagation()}
+                className="max-w-2xl w-full max-h-[calc(100vh-5rem)] flex flex-col bg-slate-900 border border-amber-500/40 rounded-2xl shadow-2xl">
+                <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-100">📖 Справочник ролей</h3>
+                    <p className="text-xs text-slate-400">Что делает каждая роль во время игры</p>
+                  </div>
+                  <button onClick={() => setShowRolesGuide(false)} className="text-slate-400 hover:text-slate-100 text-xl font-bold px-2">✕</button>
+                </div>
+                <div className="overflow-y-auto p-4 space-y-5">
+                  <div className="text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-xl p-3 leading-relaxed">
+                    <b className="text-amber-400">Ход партии:</b> ночь — роли делают тайные ходы → утро — объявляются погибшие и их последние слова → день — обсуждение → голосование за кандидата → вердикт «да/нет» (вешаем или нет) → новая ночь.
+                  </div>
+                  {GUIDE_GROUPS.map(group => (
+                    <div key={group.title} className="space-y-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">{group.title}</h4>
+                      {group.roles.map(key => {
+                        const info = ROLES_CATALOG[key];
+                        const inDeck = roomData?.settings?.deck?.[key] || 0;
+                        return (
+                          <div key={key} className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <span className="text-3xl">{info.icon}</span>
+                              <div>
+                                <div className="font-bold text-slate-100">{info.name}</div>
+                                <span className={`inline-block text-[11px] px-2 py-0.5 rounded-full border ${info.badgeClass}`}>{info.factionLabel}</span>
+                              </div>
+                              {inDeck > 0 && (
+                                <span className="ml-auto text-[11px] px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">В партии ×{inDeck}</span>
+                              )}
+                            </div>
+                            <p className="text-sm text-slate-200 leading-relaxed">{info.description}</p>
+                            <p className="text-xs text-emerald-400">🏆 {info.winCondition}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ===== Экран смерти ===== */}
           {deathOverlay.active && (
@@ -465,7 +715,7 @@
                   animationDelay: `${(idx % 3) * 0.3}s`
                 }} />
               ))}
-              <div className="max-w-lg w-full bg-zinc-950/95 border-2 border-red-700 rounded-2xl p-6 md:p-8 shadow-[0_0_80px_rgba(220,38,38,0.65)] text-center space-y-5 relative z-10 fade-in">
+              <div className="keep-dark max-w-lg w-full bg-zinc-950/95 border-2 border-red-700 rounded-2xl p-6 md:p-8 shadow-[0_0_80px_rgba(220,38,38,0.65)] text-center space-y-5 relative z-10 fade-in">
                 <div className="text-red-500 text-5xl animate-pulse">🩸</div>
                 <h2 className="text-4xl md:text-5xl font-black tracking-widest text-red-600">ВЫ УБИТЫ</h2>
                 <p className="text-sm text-red-300/80 uppercase tracking-wider font-semibold">
@@ -543,7 +793,7 @@
                   <div className="flex items-center gap-3">
                     <span className="text-4xl">{ROLES_CATALOG[inspectedRoleKey].icon}</span>
                     <div>
-                      <h3 className="text-xl font-bold text-white">{ROLES_CATALOG[inspectedRoleKey].name}</h3>
+                      <h3 className="text-xl font-bold text-slate-100">{ROLES_CATALOG[inspectedRoleKey].name}</h3>
                       <span className={`inline-block text-xs px-2.5 py-0.5 rounded-full border mt-1 ${ROLES_CATALOG[inspectedRoleKey].badgeClass}`}>
                         {ROLES_CATALOG[inspectedRoleKey].factionLabel}
                       </span>
@@ -609,7 +859,7 @@
                   <div className="flex justify-between items-center border-b border-slate-800 pb-4">
                     <div>
                       <span className="text-xs text-amber-500 font-bold uppercase">Код приглашения</span>
-                      <h2 className="text-3xl font-mono font-black tracking-wider text-white">{roomData.roomId}</h2>
+                      <h2 className="text-3xl font-mono font-black tracking-wider text-slate-100">{roomData.roomId}</h2>
                     </div>
                     <div className="text-right">
                       <span className="text-xs text-slate-400">Игроков / Карт</span>
@@ -645,7 +895,7 @@
               <div className="lg:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
                 <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-800 pb-3">
                   <div>
-                    <h3 className="text-lg font-bold text-white">Настройка колоды ролей</h3>
+                    <h3 className="text-lg font-bold text-slate-100">Настройка колоды ролей</h3>
                     <p className="text-xs text-slate-400">Нажмите на название роли, чтобы прочитать её правила и условия победы</p>
                   </div>
                   <button onClick={toggleKamikazeFaction}
@@ -700,12 +950,12 @@
               <div className="perspective-1000 w-72 h-96 cursor-pointer" onClick={revealCard}>
                 <div className="card-inner w-full h-full relative preserve-3d rounded-2xl shadow-2xl"
                   style={{ transform: isCardFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}>
-                  <div className="absolute inset-0 w-full h-full backface-hidden bg-gradient-to-br from-slate-900 to-zinc-950 rounded-2xl flex flex-col items-center justify-center border-4 border-amber-500/40 p-6 text-center">
+                  <div className="keep-dark absolute inset-0 w-full h-full backface-hidden bg-gradient-to-br from-slate-900 to-zinc-950 rounded-2xl flex flex-col items-center justify-center border-4 border-amber-500/40 p-6 text-center">
                     <span className="text-6xl mb-4 text-amber-500">♠</span>
                     <p className="text-amber-200 font-bold tracking-widest text-sm uppercase">Тапните по карте, чтобы вскрыть</p>
                     <p className="text-xs text-slate-500 mt-2">Игра начнется, когда все участники посмотрят свои карты</p>
                   </div>
-                  <div className="absolute inset-0 w-full h-full backface-hidden rotateY-180 bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-900 rounded-2xl p-6 flex flex-col items-center justify-between border-4 border-amber-500">
+                  <div className="keep-dark absolute inset-0 w-full h-full backface-hidden rotateY-180 bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-900 rounded-2xl p-6 flex flex-col items-center justify-between border-4 border-amber-500">
                     <div className="text-center">
                       <span className="text-4xl">{myRoleInfo.icon}</span>
                       <h3 className="text-2xl font-extrabold uppercase text-white mt-2">{myRoleInfo.name}</h3>
@@ -949,7 +1199,7 @@
                         }
                         if (msg.type === 'last_words') {
                           return (
-                            <div key={msg.id} className="text-xs bg-red-950/60 border-2 border-red-600/80 text-red-200 p-3 rounded-xl shadow-md">
+                            <div key={msg.id} className="keep-dark text-xs bg-red-950/60 border-2 border-red-600/80 text-red-200 p-3 rounded-xl shadow-md">
                               <div className="font-black text-red-400 uppercase tracking-wider mb-1">🩸 Предсмертная записка ({msg.senderName}):</div>
                               <p className="italic text-white">«{msg.message}»</p>
                             </div>
