@@ -76,7 +76,21 @@
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useRef } = React;
 
-    const socket = io();
+    const readLS = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
+    const writeLS = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+
+    // Постоянный id гостя: после сворачивания/перезагрузки игрок возвращается на своё место
+    let guestId = readLS('mafia_guest', '');
+    if (!guestId) {
+      guestId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+      writeLS('mafia_guest', guestId);
+    }
+    let MY_ID = null; // постоянный id игрока (приходит с сервера)
+
+    const socket = io({
+      auth: (cb) => cb({ token: readLS('mafia_token', ''), guestId }),
+      reconnectionDelayMax: 3000
+    });
 
     // ---------- Каталог ролей ----------
     const BADGE = {
@@ -360,8 +374,6 @@
       }
     };
 
-    const readLS = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } };
-    const writeLS = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 
     const GUIDE_GROUPS = [
       { title: '🟢 Мирный город', roles: ['civilian', 'lucky', 'commissar', 'doctor', 'hooker', 'hobo', 'journalist'] },
@@ -372,7 +384,7 @@
     // ---------- Приложение ----------
     function App() {
       const [screen, setScreen] = useState('JOIN');
-      const [playerName, setPlayerName] = useState('');
+      const [playerName, setPlayerName] = useState(() => readLS('mafia_nick', ''));
       const [roomIdInput, setRoomIdInput] = useState('');
       const [roomData, setRoomData] = useState(null);
       const [myRole, setMyRole] = useState(null);
@@ -401,6 +413,12 @@
       const [theme, setTheme] = useState(() => (readLS('mafia_theme', 'dark') === 'light' ? 'light' : 'dark'));
       const [isMuted, setIsMuted] = useState(() => readLS('mafia_muted', '0') === '1');
       const mutedRef = useRef(isMuted);
+      const [online, setOnline] = useState(socket.connected);
+      const [authUser, setAuthUser] = useState(null);
+      const [authMode, setAuthMode] = useState(null); // 'login' | 'register' | null
+      const [authName, setAuthName] = useState('');
+      const [authPass, setAuthPass] = useState('');
+      const [authError, setAuthError] = useState('');
 
       const chatEndRef = useRef(null);
       const revealTimeoutRef = useRef(null);
@@ -416,9 +434,63 @@
       };
 
       useEffect(() => {
+        socket.on('auth:state', ({ playerId, user }) => {
+          MY_ID = playerId;
+          setAuthUser(user);
+        });
+
+        // Сервер вернул нас в нашу комнату — восстанавливаем всё: фазу, чат, сводки, выбор
+        socket.on('session:restore', (d) => {
+          clearTimeout(revealTimeoutRef.current);
+          MY_ID = d.room.players.find(p => p.id === MY_ID)?.id || MY_ID;
+          setRoomData(d.room);
+          setMyRole(d.myRole || null);
+          setGlobalMessages(d.chat || []);
+          setMafiaMessages(d.mafiaChat || []);
+          setPersonalAlerts(d.alerts || []);
+          setCultMembers(d.cult || []);
+          setMafiaTeam(d.mafiaTeam || []);
+          setActionConfirmed(!!d.acted);
+          setPrimaryTarget(d.myVote || null);
+          setSecondaryTarget(null);
+          setGameOver(d.gameOver || null);
+          setIsCardFlipped(!!d.revealed);
+          setDeathOverlay({ active: false, reason: '', canWriteLastWords: false, submitted: false });
+          if (d.phase) {
+            setPhaseInfo({ status: d.phase.status, round: d.phase.round || 1, message: d.phase.message });
+            endRef.current = Date.now() + (d.phase.timeLeft || 0) * 1000;
+            setTimerLeft(d.phase.timeLeft || 0);
+          }
+          const st = d.room.status;
+          if (st === 'LOBBY') setScreen('LOBBY');
+          else if (st === 'ROLE_REVEAL' && !d.revealed) setScreen('REVEAL');
+          else setScreen('GAME');
+        });
+
+        // Активной сессии нет (комната закрыта / вы вышли) — на экран входа
+        socket.on('room:kicked', ({ message }) => {
+          clearTimeout(revealTimeoutRef.current);
+          resetGameState();
+          setRoomData(null);
+          setMyRole(null);
+          setScreen('JOIN');
+          alert(message || 'Вас исключили из комнаты.');
+        });
+
+        socket.on('session:none', () => {
+          clearTimeout(revealTimeoutRef.current);
+          resetGameState();
+          setRoomData(null);
+          setMyRole(null);
+          setScreen('JOIN');
+        });
+
+        socket.on('connect', () => { setOnline(true); socket.emit('client:ready'); });
+        socket.on('disconnect', () => setOnline(false));
+
         socket.on('room:update', (room) => {
           setRoomData(room);
-          const me = room.players.find(p => p.id === socket.id);
+          const me = room.players.find(p => p.id === MY_ID);
           if (me && me.role) setMyRole(me.role);
         });
         socket.on('game:error', (msg) => alert(msg));
@@ -426,7 +498,7 @@
         socket.on('game:started', (room) => {
           resetGameState();
           setRoomData(room);
-          const me = room.players.find(p => p.id === socket.id);
+          const me = room.players.find(p => p.id === MY_ID);
           setMyRole(me ? me.role : null);
           setScreen('REVEAL');
         });
@@ -469,8 +541,10 @@
         });
         socket.on('night:action_confirmed', () => setActionConfirmed(true));
 
+        if (socket.connected) { setOnline(true); socket.emit('client:ready'); }
+
         return () => {
-          ['room:update', 'game:error', 'game:started', 'game:restarted', 'game:phase_change', 'game:over',
+          ['auth:state', 'session:restore', 'session:none', 'room:kicked', 'connect', 'disconnect', 'room:update', 'game:error', 'game:started', 'game:restarted', 'game:phase_change', 'game:over',
            'chat:global:message', 'chat:mafia:message', 'mafia:acquaintance', 'cult:update',
            'personal:alert', 'mirror:transformed', 'player:you_died', 'night:action_confirmed']
             .forEach(ev => socket.off(ev));
@@ -506,6 +580,59 @@
         };
       }, []);
 
+      // Свернули/вернулись в окно: переподключаемся и запрашиваем актуальное состояние
+      useEffect(() => {
+        let hiddenAt = 0;
+        const onVis = () => {
+          if (document.hidden) { hiddenAt = Date.now(); return; }
+          if (!socket.connected) socket.connect();
+          else if (hiddenAt && Date.now() - hiddenAt > 3000) socket.emit('client:ready');
+        };
+        const onOnline = () => { if (!socket.connected) socket.connect(); };
+        document.addEventListener('visibilitychange', onVis);
+        window.addEventListener('online', onOnline);
+        return () => {
+          document.removeEventListener('visibilitychange', onVis);
+          window.removeEventListener('online', onOnline);
+        };
+      }, []);
+
+      // Вошли в аккаунт — ник подставляется сам
+      useEffect(() => { if (authUser) setPlayerName(authUser.name); }, [authUser]);
+
+      const doAuth = (mode) => {
+        setAuthError('');
+        socket.emit('auth:' + mode, { name: authName, password: authPass }, (res) => {
+          if (!res || !res.success) return setAuthError((res && res.message) || 'Ошибка. Попробуйте ещё раз.');
+          writeLS('mafia_token', res.token);
+          setAuthMode(null);
+          setAuthPass('');
+          socket.disconnect();
+          socket.connect();
+        });
+      };
+
+      const logout = () => {
+        socket.emit('auth:logout', { token: readLS('mafia_token', '') }, () => {
+          writeLS('mafia_token', '');
+          setAuthUser(null);
+          socket.disconnect();
+          socket.connect();
+        });
+      };
+
+      const kickPlayer = (p) => {
+        if (!isHost || p.id === MY_ID) return;
+        if (!confirm(`Исключить игрока ${p.name} из комнаты?`)) return;
+        socket.emit('room:kick', { roomId: roomData.roomId, targetId: p.id });
+      };
+
+      const leaveCurrentRoom = () => {
+        if (roomData && roomData.status !== 'LOBBY' && roomData.status !== 'GAME_OVER'
+            && !confirm('Покинуть партию? Вернуться в неё будет нельзя.')) return;
+        socket.emit('room:leave', {});
+      };
+
       const toggleTheme = () => setTheme(t => (t === 'dark' ? 'light' : 'dark'));
       const toggleMusic = () => {
         const next = !isMuted;
@@ -515,9 +642,9 @@
         if (next) music.stop(); else music.start();
       };
 
-      const me = roomData?.players?.find(p => p.id === socket.id);
+      const me = roomData?.players?.find(p => p.id === MY_ID);
       const isAlive = me ? me.isAlive : true;
-      const isHost = roomData?.hostId === socket.id;
+      const isHost = roomData?.hostId === MY_ID;
       const myRoleInfo = myRole ? ROLES_CATALOG[myRole] : null;
       const isBlackTeam = me?.faction === 'BLACK';
 
@@ -642,7 +769,23 @@
         <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 md:p-6 md:pt-16 ${deathOverlay.active ? 'animate-shake' : ''}`}>
 
           {/* ===== Панель в углу: роли / тема / музыка ===== */}
+          {!online && (
+            <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-semibold shadow-lg">
+              📡 Соединение потеряно — переподключаемся…
+            </div>
+          )}
+
           <div className="fixed top-3 right-3 z-[70] flex items-center gap-2">
+            {/* Ссылка открывается в новой вкладке — игра остаётся открытой, а при возврате сессия восстановится */}
+            <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
+              title="Поддержать бомжа"
+              className="h-10 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold flex items-center gap-1.5 shadow-lg transition">
+              <span>🍾</span><span className="hidden sm:inline">Поддержать бомжа</span>
+            </a>
+            {roomData && screen !== 'JOIN' && (
+              <button onClick={leaveCurrentRoom} title="Выйти из комнаты"
+                className="h-10 w-10 rounded-xl bg-slate-900/90 border border-slate-700 text-lg hover:bg-slate-800 backdrop-blur shadow-lg transition">🚪</button>
+            )}
             <button onClick={() => setShowRolesGuide(true)} title="Все роли и их способности"
               className="h-10 px-3 rounded-xl bg-slate-900/90 border border-slate-700 text-sm font-semibold text-slate-100 hover:bg-slate-800 backdrop-blur flex items-center gap-1.5 shadow-lg transition">
               <span>📖</span><span className="hidden sm:inline">Роли</span>
@@ -830,9 +973,48 @@
                 <p className="text-xs text-slate-400">Карточная механика, Секта, Некромант, Кукловод и Предсмертные записки</p>
               </div>
               <div className="space-y-4">
-                <input type="text" placeholder="Ваш игровой никнейм" maxLength={20} value={playerName}
-                  onChange={e => setPlayerName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-500" />
+                {authUser ? (
+                  <div className="flex items-center justify-between bg-slate-950 border border-emerald-700/50 rounded-xl px-4 py-3">
+                    <span className="font-semibold">👤 {authUser.name}</span>
+                    <button onClick={logout} className="text-xs text-slate-400 hover:text-slate-100 underline">Выйти из аккаунта</button>
+                  </div>
+                ) : (
+                  <>
+                    <input type="text" placeholder="Ваш игровой никнейм" maxLength={20} value={playerName}
+                      onChange={e => { setPlayerName(e.target.value); writeLS('mafia_nick', e.target.value); }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-500" />
+                    {authMode ? (
+                      <div className="space-y-2 bg-slate-950 border border-slate-800 rounded-xl p-3">
+                        <div className="flex gap-2 text-xs font-semibold">
+                          <button onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                            className={`flex-1 py-1.5 rounded-lg border ${authMode === 'login' ? 'border-amber-500 text-amber-400' : 'border-slate-800 text-slate-400'}`}>Вход</button>
+                          <button onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                            className={`flex-1 py-1.5 rounded-lg border ${authMode === 'register' ? 'border-amber-500 text-amber-400' : 'border-slate-800 text-slate-400'}`}>Регистрация</button>
+                        </div>
+                        <input type="text" placeholder="Ник (2–20 символов)" maxLength={20} value={authName}
+                          onChange={e => setAuthName(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500" />
+                        <input type="password" placeholder="Пароль (от 6 символов)" value={authPass}
+                          onChange={e => setAuthPass(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') doAuth(authMode); }}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500" />
+                        {authError && <p className="text-xs text-red-400">{authError}</p>}
+                        <div className="flex gap-2">
+                          <button onClick={() => doAuth(authMode)}
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-sm transition">
+                            {authMode === 'login' ? 'Войти' : 'Создать аккаунт'}
+                          </button>
+                          <button onClick={() => setAuthMode(null)} className="px-3 text-xs text-slate-400 hover:text-slate-100">Отмена</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => { setAuthMode('register'); setAuthName(playerName); setAuthError(''); }}
+                        className="text-xs text-amber-400 underline">
+                        🔑 Войти или зарегистрироваться (ник сохранится)
+                      </button>
+                    )}
+                  </>
+                )}
                 <input type="text" placeholder="Код комнаты (если пригласил друг)" value={roomIdInput}
                   onChange={e => setRoomIdInput(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 uppercase focus:outline-none focus:border-amber-500" />
@@ -847,6 +1029,10 @@
                 <button onClick={createRoom} className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg">
                   Создать новое лобби (Хост)
                 </button>
+                <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
+                  className="block text-center w-full border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 font-semibold py-2.5 rounded-xl text-sm transition">
+                  🍾 Поддержать бомжа
+                </a>
               </div>
             </div>
           )}
@@ -873,8 +1059,17 @@
                     <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                       {roomData.players.map(p => (
                         <div key={p.id} className="bg-slate-950 px-3.5 py-2.5 rounded-xl border border-slate-800 flex justify-between items-center text-sm">
-                          <span className="font-medium">{p.name} {p.id === socket.id && '(Вы)'}</span>
-                          {p.isHost && <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-semibold">Ведущий</span>}
+                          <span className="font-medium">{p.name} {p.id === MY_ID && '(Вы)'}</span>
+                          <div className="flex items-center gap-2">
+                            {p.isHost && <span className="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-semibold">Ведущий</span>}
+                            {!p.connected && <span className="text-[11px] text-slate-500">⏳ нет связи</span>}
+                            {isHost && p.id !== MY_ID && (
+                              <button onClick={() => kickPlayer(p)} title="Исключить игрока"
+                                className="text-xs px-2 py-0.5 rounded bg-red-950/70 text-red-300 border border-red-800/60 hover:bg-red-900 transition">
+                                Выгнать
+                              </button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1027,7 +1222,7 @@
                               p.isAlive ? 'bg-slate-950 border-slate-800' : 'bg-red-950/20 border-red-900/40 opacity-70'}`}>
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold text-sm">{p.name}</span>
-                              {p.id === socket.id && <span className="text-[11px] text-amber-400">(Вы)</span>}
+                              {p.id === MY_ID && <span className="text-[11px] text-amber-400">(Вы)</span>}
                               {cultMembers.includes(p.name) && (
                                 <span className="text-xs px-1.5 py-0.5 rounded bg-fuchsia-950 text-fuchsia-300 border border-fuchsia-700/50">🕯️ Секта</span>
                               )}
@@ -1059,7 +1254,7 @@
 
                 <div className="lg:col-span-2 space-y-5">
                   {/* Камикадзе */}
-                  {phaseInfo.status === 'KAMIKAZE_REVENGE' && roomData.kamikazeActorId === socket.id && (
+                  {phaseInfo.status === 'KAMIKAZE_REVENGE' && roomData.kamikazeActorId === MY_ID && (
                     <div className="bg-orange-950/40 border-2 border-orange-500 rounded-2xl p-5 space-y-4 animate-pulse">
                       <h3 className="text-lg font-extrabold text-orange-400">💣 ПОСЛЕДНЕЕ СЛОВО КАМИКАДЗЕ: выберите, кого забрать с собой!</h3>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -1092,7 +1287,7 @@
                   {/* Вердикт: вешаем или нет */}
                   {phaseInfo.status === 'CONFIRM_VOTE' && roomData.accusedId && (() => {
                     const accused = roomData.players.find(p => p.id === roomData.accusedId);
-                    const isAccused = roomData.accusedId === socket.id;
+                    const isAccused = roomData.accusedId === MY_ID;
                     return (
                       <div className="bg-slate-900 border-2 border-red-600/70 rounded-2xl p-5 space-y-3">
                         <h3 className="text-lg font-extrabold text-red-400">⚖️ Вешаем {accused?.name}?</h3>
@@ -1144,7 +1339,7 @@
                             <span className="text-xs text-slate-400 font-semibold">{primaryLabel}</span>
                             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                               {roomData.players
-                                .filter(p => myRole === 'necromancer' ? !p.isAlive : (p.isAlive && !(myRole === 'mirror' && p.id === socket.id)))
+                                .filter(p => myRole === 'necromancer' ? !p.isAlive : (p.isAlive && !(myRole === 'mirror' && p.id === MY_ID)))
                                 .map(p => (
                                   <button key={p.id} onClick={() => setPrimaryTarget(p.id)}
                                     className={`p-2.5 rounded-xl border text-xs font-semibold transition ${
