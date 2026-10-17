@@ -56,7 +56,7 @@ const roleRu = (role) => ROLE_NAMES_RU[role] || role;
 
 // Анонимные фразы для чата, когда роль сделала ночной ход (без имён игроков)
 const NIGHT_PHRASES = {
-  commissar: '🕵️ Комиссар вышел на ночное расследование.',
+  commissar: '🕵️ Комиссар вышел на ночной обход.',
   doctor: '⚕️ Доктор взял чемоданчик и отправился на вызов.',
   hooker: '💋 Любовница вышла на ночной промысел.',
   hobo: '🍾 Бомж пошёл за бутылкой.',
@@ -126,6 +126,10 @@ io.use((socket, next) => {
 
 // ----- Сессии и комнаты -----
 const playerRooms = new Map(); // playerId -> roomId
+
+// Счётчик людей на сайте (уникальные игроки, несколько вкладок = один человек)
+const onlineCount = new Map();
+const broadcastOnline = () => io.emit('online:count', onlineCount.size);
 
 function roomOfPlayer(pid) {
   const id = playerRooms.get(pid);
@@ -205,6 +209,7 @@ function notify(room, pid, text) {
 
 function sendState(socket) {
   const pid = socket.data.playerId;
+  socket.emit('online:count', onlineCount.size);
   socket.emit('auth:state', { playerId: pid, user: socket.data.user ? { name: socket.data.user.name } : null });
   const room = roomOfPlayer(pid);
   const player = room && room.players.find(p => p.id === pid);
@@ -267,6 +272,7 @@ function newPlayer(id, name, isHost) {
     hasUsedInstigator: false,
     mirrorDonorId: null,
     lastDoctorTarget: null,
+    hasShot: false,
     awaitingLastWords: false,
     alerts: [],
     dcTimer: null,
@@ -299,7 +305,8 @@ function publicRoom(room, viewerId) {
         role: reveal ? p.role : null,
         originalRole: reveal ? p.originalRole : null,
         faction: reveal ? p.faction : null,
-        isCultMember: p.id === viewerId ? p.isCultMember : false
+        isCultMember: p.id === viewerId ? p.isCultMember : false,
+        hasShot: p.id === viewerId ? p.hasShot : false
       };
     })
   };
@@ -339,6 +346,8 @@ function resetRoundState(room) {
 io.on('connection', (socket) => {
   const myPid = socket.data.playerId;
   socket.join(myPid);
+  onlineCount.set(myPid, (onlineCount.get(myPid) || 0) + 1);
+  broadcastOnline();
 
   // Игрок вернулся (развернул окно / перезагрузил страницу): возвращаем в его комнату
   const returning = roomOfPlayer(myPid);
@@ -517,6 +526,7 @@ io.on('connection', (socket) => {
       player.lastDoctorTarget = null;
       player.awaitingLastWords = false;
       player.alerts = [];
+      player.hasShot = false;
     });
 
     room.status = PHASES.ROLE_REVEAL;
@@ -620,7 +630,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('night:action', ({ roomId, targetId, secondTargetId } = {}) => {
+  socket.on('night:action', ({ roomId, targetId, secondTargetId, mode } = {}) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.NIGHT) return;
 
@@ -631,6 +641,14 @@ io.on('connection', (socket) => {
     if (!target) return;
     // Некромант выбирает мертвого, остальные — живых
     if (player.role === 'necromancer' ? target.isAlive : !target.isAlive) return;
+
+    if (player.role === 'commissar' && mode === 'shoot') {
+      if (player.hasShot) {
+        notify(room, player.id, '🔫 Ваш единственный патрон уже потрачен — можно только проверять.');
+        return;
+      }
+      if (target.id === player.id) return;
+    }
 
     let second = null;
     if (secondTargetId) {
@@ -647,7 +665,8 @@ io.on('connection', (socket) => {
       actorId: player.id,
       role: player.role,
       targetId: target.id,
-      secondTargetId: second
+      secondTargetId: second,
+      mode: player.role === 'commissar' && mode === 'shoot' ? 'shoot' : 'check'
     };
 
     socket.emit('night:action_confirmed', { role: player.role, targetId, secondTargetId });
@@ -708,6 +727,9 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const pid = socket.data.playerId;
+    const cnt = (onlineCount.get(pid) || 1) - 1;
+    if (cnt <= 0) onlineCount.delete(pid); else onlineCount.set(pid, cnt);
+    broadcastOnline();
     const still = io.sockets.adapter.rooms.get(pid);
     if (still && still.size > 0) return; // у игрока открыта другая вкладка
     const room = roomOfPlayer(pid);
@@ -898,6 +920,17 @@ function resolveNight(roomId) {
     killedIds.add(necromancerKillTarget);
   }
 
+  // Выстрел Комиссара (один патрон на игру). Доктор может спасти цель.
+  Object.values(actions).forEach(act => {
+    if (act.role !== 'commissar' || act.mode !== 'shoot' || blockedPlayerIds.has(act.actorId) || !act.targetId) return;
+    const com = byId(act.actorId);
+    if (!com || com.hasShot) return;
+    com.hasShot = true;
+    registerVisit(act.targetId, com.name);
+    notify(room, com.id, '🔫 Вы сделали выстрел.');
+    if (!healedTargets.has(act.targetId)) killedIds.add(act.targetId);
+  });
+
   // 8. Вербовка Сектанта
   Object.values(actions).forEach(act => {
     if (act.role !== 'cultist' || blockedPlayerIds.has(act.actorId) || killedIds.has(act.actorId) || !act.targetId) return;
@@ -927,7 +960,7 @@ function resolveNight(roomId) {
     const actor = byId(act.actorId);
     if (!actor || blockedPlayerIds.has(actor.id)) return;
 
-    if (act.role === 'commissar' && act.targetId) {
+    if (act.role === 'commissar' && act.mode !== 'shoot' && act.targetId) {
       const target = byId(act.targetId);
       if (target) {
         const isBlack = target.faction === 'BLACK' || target.id === framedPlayerId;
