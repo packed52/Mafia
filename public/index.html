@@ -113,7 +113,7 @@
         description: 'Пассивный навык «Удача»: если ночью мафия стреляет в него, шанс выжить — 50%. При успехе Счастливчик остается жив, а мафия считает выстрел состоявшимся.',
         winCondition: 'Побеждает вместе с мирными жителями.' },
       commissar: { name: 'Комиссар (Шериф)', icon: '🕵️', factionLabel: RED_LABEL, badgeClass: BADGE.RED, targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь проверяет одного игрока на принадлежность к мафии. Если игрока в эту же ночь подставил Подстрекатель, Комиссар увидит «Черный» статус.',
+        description: 'Каждую ночь выбирает: проверить игрока на принадлежность к мафии ИЛИ выстрелить в него (один патрон на всю игру; Доктор может спасти цель). Если игрока в эту же ночь подставил Подстрекатель, проверка покажет «Черный» статус.',
         winCondition: 'Побеждает вместе с мирными жителями.' },
       doctor: { name: 'Доктор', icon: '⚕️', factionLabel: RED_LABEL, badgeClass: BADGE.RED, targetMode: 'SINGLE_ALIVE',
         description: 'Каждую ночь выбирает игрока, которого спасает от смертельного покушения. Одного и того же человека (включая себя) нельзя лечить две ночи подряд.',
@@ -419,6 +419,8 @@
       const [authName, setAuthName] = useState('');
       const [authPass, setAuthPass] = useState('');
       const [authError, setAuthError] = useState('');
+      const [onlineCount, setOnlineCount] = useState(0);
+      const [commissarMode, setCommissarMode] = useState('check');
 
       const chatEndRef = useRef(null);
       const revealTimeoutRef = useRef(null);
@@ -434,6 +436,8 @@
       };
 
       useEffect(() => {
+        socket.on('online:count', (n) => setOnlineCount(n));
+
         socket.on('auth:state', ({ playerId, user }) => {
           MY_ID = playerId;
           setAuthUser(user);
@@ -537,14 +541,14 @@
         });
         socket.on('player:you_died', ({ reason, timeForLastWords }) => {
           playHorrorDeathSound();
-          setDeathOverlay({ active: true, reason, canWriteLastWords: timeForLastWords > 0, submitted: false });
+          setDeathOverlay({ active: true, fresh: true, reason, canWriteLastWords: timeForLastWords > 0, submitted: false });
         });
         socket.on('night:action_confirmed', () => setActionConfirmed(true));
 
         if (socket.connected) { setOnline(true); socket.emit('client:ready'); }
 
         return () => {
-          ['auth:state', 'session:restore', 'session:none', 'room:kicked', 'connect', 'disconnect', 'room:update', 'game:error', 'game:started', 'game:restarted', 'game:phase_change', 'game:over',
+          ['online:count', 'auth:state', 'session:restore', 'session:none', 'room:kicked', 'connect', 'disconnect', 'room:update', 'game:error', 'game:started', 'game:restarted', 'game:phase_change', 'game:over',
            'chat:global:message', 'chat:mafia:message', 'mafia:acquaintance', 'cult:update',
            'personal:alert', 'mirror:transformed', 'player:you_died', 'night:action_confirmed']
             .forEach(ev => socket.off(ev));
@@ -710,7 +714,8 @@
         if (!primaryTarget) return alert('Выберите основную цель!');
         if (needsSecond && !secondaryTarget) return alert('Выберите вторую цель!');
         socket.emit('night:action', {
-          roomId: roomData.roomId, targetId: primaryTarget, secondTargetId: secondaryTarget
+          roomId: roomData.roomId, targetId: primaryTarget, secondTargetId: secondaryTarget,
+          mode: myRole === 'commissar' ? (me?.hasShot ? 'check' : commissarMode) : undefined
         });
       };
 
@@ -756,6 +761,7 @@
         : myRole === 'puppeteer' ? '1. Выберите Марионетку (чей ход перенаправить):'
         : myRole === 'journalist' ? '1. Выберите первого игрока для сравнения фракций:'
         : myRole === 'don' ? '1. Выберите жертву для выстрела мафии:'
+        : myRole === 'commissar' ? (commissarMode === 'shoot' && !me?.hasShot ? '1. Выберите, в кого выстрелить:' : '1. Выберите, кого проверить:')
         : myRole === 'mirror' ? 'Выберите донора (чью роль скопируете после его гибели):'
         : 'Выберите цель ночной способности:';
 
@@ -766,9 +772,14 @@
         : '2. Кого проверить на роль Комиссара (необязательно):';
 
       return (
-        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 md:p-6 md:pt-16 ${deathOverlay.active ? 'animate-shake' : ''}`}>
+        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 md:p-6 md:pt-16 ${deathOverlay.active && deathOverlay.fresh ? 'animate-shake' : ''}`}>
 
           {/* ===== Панель в углу: роли / тема / музыка ===== */}
+          <div className="fixed top-3 left-3 z-[70] h-10 px-3 rounded-xl bg-slate-900/90 border border-slate-700 text-sm font-semibold text-slate-100 backdrop-blur shadow-lg flex items-center gap-2" title="Сейчас на сайте">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Онлайн: {onlineCount}</span>
+          </div>
+
           {!online && (
             <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-semibold shadow-lg">
               📡 Соединение потеряно — переподключаемся…
@@ -847,6 +858,14 @@
             </div>
           )}
 
+          {/* Кнопка возврата к предсмертной записке, пока идёт её время */}
+          {!deathOverlay.active && deathOverlay.canWriteLastWords && !deathOverlay.submitted && phaseInfo.status === 'MORNING_LAST_WORDS' && (
+            <button onClick={() => setDeathOverlay(prev => ({ ...prev, active: true }))}
+              className="fixed bottom-4 left-4 z-[60] px-4 py-3 rounded-xl bg-red-700 hover:bg-red-600 text-white text-sm font-bold shadow-lg animate-pulse">
+              ✍️ Написать предсмертную записку ({timerLeft} сек)
+            </button>
+          )}
+
           {/* ===== Экран смерти ===== */}
           {deathOverlay.active && (
             <div className="fixed inset-0 z-50 blood-vignette flex flex-col items-center justify-center p-4 backdrop-blur-sm fade-in">
@@ -886,9 +905,9 @@
                   </p>
                 )}
 
-                <button onClick={() => setDeathOverlay(prev => ({ ...prev, active: false }))}
+                <button onClick={() => setDeathOverlay(prev => ({ ...prev, active: false, fresh: false }))}
                   className="text-xs text-slate-400 hover:text-white underline pt-2">
-                  Скрыть багровый экран и наблюдать за столом
+                  {deathOverlay.canWriteLastWords && !deathOverlay.submitted ? 'Свернуть и посмотреть стол (можно вернуться и написать)' : 'Скрыть багровый экран и наблюдать за столом'}
                 </button>
               </div>
             </div>
@@ -1336,6 +1355,18 @@
                       ) : (
                         <>
                           <div className="space-y-2">
+                            {myRole === 'commissar' && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <button onClick={() => setCommissarMode('check')}
+                                  className={`py-2 rounded-xl border text-xs font-bold transition ${commissarMode === 'check' || me?.hasShot ? 'bg-indigo-600/30 border-indigo-400 text-indigo-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+                                  🔍 Проверить
+                                </button>
+                                <button onClick={() => { if (!me?.hasShot) setCommissarMode('shoot'); }} disabled={!!me?.hasShot}
+                                  className={`py-2 rounded-xl border text-xs font-bold transition disabled:opacity-40 ${commissarMode === 'shoot' && !me?.hasShot ? 'bg-red-700/40 border-red-400 text-red-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+                                  🔫 Выстрелить {me?.hasShot ? '(патрон потрачен)' : '(1 патрон)'}
+                                </button>
+                              </div>
+                            )}
                             <span className="text-xs text-slate-400 font-semibold">{primaryLabel}</span>
                             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                               {roomData.players
