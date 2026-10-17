@@ -3,10 +3,16 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { randomUUID } = require('crypto');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: { origin: '*' },
+  pingInterval: 20000,
+  pingTimeout: 60000
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -65,6 +71,169 @@ const NIGHT_PHRASES = {
 };
 
 // ---------- Утилиты ----------
+
+// ----- Аккаунты (хранятся в data/users.json) -----
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+let db = { users: [] };
+try { db = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch (e) { /* файла ещё нет */ }
+if (!Array.isArray(db.users)) db.users = [];
+
+function saveUsers() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = USERS_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(db));
+    fs.renameSync(tmp, USERS_FILE);
+  } catch (e) {
+    console.error('Не удалось сохранить аккаунты:', e.message);
+  }
+}
+const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+const hashPassword = (pw, salt) => crypto.scryptSync(pw, salt, 64).toString('hex');
+const findUserByName = (name) => db.users.find(u => u.nameLower === String(name).toLowerCase());
+const findUserByToken = (token) => (token ? db.users.find(u => u.tokens.includes(sha(token))) : null);
+function issueToken(user) {
+  const token = crypto.randomBytes(32).toString('hex');
+  user.tokens.push(sha(token));
+  if (user.tokens.length > 10) user.tokens.shift();
+  saveUsers();
+  return token;
+}
+function rateOk(socket) {
+  const now = Date.now();
+  const log = (socket.data.authLog = (socket.data.authLog || []).filter(t => now - t < 60000));
+  if (log.length >= 10) return false;
+  log.push(now);
+  return true;
+}
+
+// Личность игрока: аккаунт (u_...) или гость (g_...). Не зависит от socket.id,
+// поэтому после сворачивания/перезагрузки игрок возвращается на своё место.
+io.use((socket, next) => {
+  const a = socket.handshake.auth || {};
+  const user = findUserByToken(typeof a.token === 'string' ? a.token : '');
+  if (user) {
+    socket.data.playerId = user.id;
+    socket.data.user = user;
+  } else {
+    const g = String(a.guestId || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 64) || randomUUID();
+    socket.data.playerId = 'g_' + g;
+    socket.data.user = null;
+  }
+  next();
+});
+
+// ----- Сессии и комнаты -----
+const playerRooms = new Map(); // playerId -> roomId
+
+function roomOfPlayer(pid) {
+  const id = playerRooms.get(pid);
+  const room = id ? rooms.get(id) : null;
+  return room && room.players.some(p => p.id === pid) ? room : null;
+}
+
+function destroyRoom(room) {
+  clearTimeout(room.phaseTimer);
+  clearTimeout(room.cleanupTimer);
+  room.players.forEach(p => {
+    clearTimeout(p.dcTimer);
+    if (playerRooms.get(p.id) === room.roomId) playerRooms.delete(p.id);
+  });
+  rooms.delete(room.roomId);
+}
+
+// Если в комнате никого нет онлайн 10 минут — удаляем
+function scheduleCleanup(room) {
+  clearTimeout(room.cleanupTimer);
+  if (room.players.some(p => p.connected)) return;
+  room.cleanupTimer = setTimeout(() => destroyRoom(room), 10 * 60 * 1000);
+}
+
+function removeFromLobby(room, pid) {
+  const idx = room.players.findIndex(p => p.id === pid);
+  if (idx === -1) return;
+  clearTimeout(room.players[idx].dcTimer);
+  room.players.splice(idx, 1);
+  playerRooms.delete(pid);
+  if (room.players.length === 0) return destroyRoom(room);
+  if (room.hostId === pid) room.hostId = (room.players.find(p => p.connected) || room.players[0]).id;
+  emitRoom(room);
+}
+
+function leaveRoom(pid) {
+  const room = roomOfPlayer(pid);
+  if (!room) return;
+  io.in(pid).socketsLeave(room.roomId);
+  playerRooms.delete(pid);
+  const player = room.players.find(p => p.id === pid);
+  if (!player) return;
+  clearTimeout(player.dcTimer);
+  if (room.status === PHASES.LOBBY) {
+    removeFromLobby(room, pid);
+  } else {
+    player.connected = false;
+    player.left = true;
+    emitRoom(room);
+    scheduleCleanup(room);
+  }
+}
+
+// Журналы для восстановления после возвращения в игру
+function emitChat(roomId, msg) {
+  const room = rooms.get(roomId);
+  if (room) {
+    room.chatLog.push(msg);
+    if (room.chatLog.length > 200) room.chatLog.shift();
+  }
+  io.to(roomId).emit('chat:global:message', msg);
+}
+
+function emitPhase(room, payload) {
+  room.phaseInfo = { ...payload, endsAt: Date.now() + (payload.timeLeft || 0) * 1000 };
+  io.to(room.roomId).emit('game:phase_change', payload);
+}
+
+function notify(room, pid, text) {
+  const p = room.players.find(x => x.id === pid);
+  if (p) {
+    p.alerts.unshift({ id: randomUUID(), text });
+    if (p.alerts.length > 50) p.alerts.pop();
+  }
+  io.to(pid).emit('personal:alert', text);
+}
+
+function sendState(socket) {
+  const pid = socket.data.playerId;
+  socket.emit('auth:state', { playerId: pid, user: socket.data.user ? { name: socket.data.user.name } : null });
+  const room = roomOfPlayer(pid);
+  const player = room && room.players.find(p => p.id === pid);
+  if (!room || !player) return socket.emit('session:none');
+
+  const black = player.faction === 'BLACK';
+  const phase = room.phaseInfo;
+  socket.emit('session:restore', {
+    room: publicRoom(room, pid),
+    myRole: player.role,
+    revealed: player.hasRevealedCard,
+    acted: !!room.nightDone[pid],
+    myVote: room.status === PHASES.VOTING ? (room.dayVotes[pid] || null)
+      : room.status === PHASES.CONFIRM_VOTE ? (room.confirmVotes[pid] || null) : null,
+    phase: phase ? {
+      status: phase.status, round: phase.round, message: phase.message,
+      timeLeft: Math.max(0, Math.ceil((phase.endsAt - Date.now()) / 1000))
+    } : null,
+    chat: room.chatLog,
+    mafiaChat: black ? room.mafiaLog : [],
+    alerts: player.alerts,
+    cult: player.isAlive && player.isCultMember
+      ? room.players.filter(p => p.isAlive && p.isCultMember).map(p => p.name) : [],
+    mafiaTeam: black
+      ? room.players.filter(p => p.faction === 'BLACK').map(p => ({ id: p.id, name: p.name, role: p.role })) : [],
+    gameOver: room.status === PHASES.GAME_OVER ? { winner: room.winner } : null
+  });
+}
+
 function makeRoomId() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let id;
@@ -98,7 +267,10 @@ function newPlayer(id, name, isHost) {
     hasUsedInstigator: false,
     mirrorDonorId: null,
     lastDoctorTarget: null,
-    awaitingLastWords: false
+    awaitingLastWords: false,
+    alerts: [],
+    dcTimer: null,
+    left: false
   };
 }
 
@@ -140,7 +312,7 @@ function emitRoom(room) {
 }
 
 function sendSystemChat(roomId, text) {
-  io.to(roomId).emit('chat:global:message', {
+  emitChat(roomId, {
     id: randomUUID(), senderName: 'Ведущий', message: text, type: 'system'
   });
 }
@@ -158,16 +330,78 @@ function resetRoundState(room) {
   room.accusedId = null;
   room.confirmVotes = {};
   room.kamikazeActorId = null;
+  room.chatLog = [];
+  room.mafiaLog = [];
+  room.phaseInfo = null;
 }
 
 // ---------- Сокеты ----------
 io.on('connection', (socket) => {
+  const myPid = socket.data.playerId;
+  socket.join(myPid);
+
+  // Игрок вернулся (развернул окно / перезагрузил страницу): возвращаем в его комнату
+  const returning = roomOfPlayer(myPid);
+  if (returning) {
+    const pl = returning.players.find(p => p.id === myPid);
+    socket.join(returning.roomId);
+    clearTimeout(pl.dcTimer);
+    clearTimeout(returning.cleanupTimer);
+    pl.connected = true;
+    emitRoom(returning);
+  }
+
+  // Клиент сообщает, что готов принять состояние (после регистрации обработчиков)
+  socket.on('client:ready', () => sendState(socket));
+
+  socket.on('auth:register', ({ name, password } = {}, cb) => {
+    if (typeof cb !== 'function') return;
+    if (!rateOk(socket)) return cb({ success: false, message: 'Слишком много попыток. Подождите минуту.' });
+    const n = String(name || '').trim();
+    if (!/^[\p{L}\p{N}_\- .]{2,20}$/u.test(n)) return cb({ success: false, message: 'Ник: 2–20 символов (буквы, цифры, _ - .)' });
+    if (typeof password !== 'string' || password.length < 6 || password.length > 100) {
+      return cb({ success: false, message: 'Пароль должен быть не короче 6 символов' });
+    }
+    if (findUserByName(n)) return cb({ success: false, message: 'Такой ник уже занят' });
+    const salt = crypto.randomBytes(16).toString('hex');
+    const user = { id: 'u_' + randomUUID(), name: n, nameLower: n.toLowerCase(), salt, hash: hashPassword(password, salt), tokens: [] };
+    db.users.push(user);
+    cb({ success: true, token: issueToken(user), name: n });
+  });
+
+  socket.on('auth:login', ({ name, password } = {}, cb) => {
+    if (typeof cb !== 'function') return;
+    if (!rateOk(socket)) return cb({ success: false, message: 'Слишком много попыток. Подождите минуту.' });
+    const user = findUserByName(String(name || '').trim());
+    if (!user || typeof password !== 'string') return cb({ success: false, message: 'Неверный ник или пароль' });
+    const a = Buffer.from(hashPassword(password, user.salt), 'hex');
+    const b = Buffer.from(user.hash, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return cb({ success: false, message: 'Неверный ник или пароль' });
+    cb({ success: true, token: issueToken(user), name: user.name });
+  });
+
+  socket.on('auth:logout', ({ token } = {}, cb) => {
+    const user = findUserByToken(typeof token === 'string' ? token : '');
+    if (user) {
+      user.tokens = user.tokens.filter(h => h !== sha(token));
+      saveUsers();
+    }
+    if (typeof cb === 'function') cb();
+  });
+
+  socket.on('room:leave', () => {
+    leaveRoom(socket.data.playerId);
+    io.to(socket.data.playerId).emit('session:none');
+  });
   socket.on('room:create', ({ playerName } = {}, callback) => {
     if (typeof callback !== 'function') return;
+    const pid = socket.data.playerId;
+    leaveRoom(pid);
+    const name = socket.data.user ? socket.data.user.name : playerName;
     const roomId = makeRoomId();
     const room = {
       roomId,
-      hostId: socket.id,
+      hostId: pid,
       status: PHASES.LOBBY,
       round: 0,
       settings: {
@@ -182,35 +416,55 @@ io.on('connection', (socket) => {
         votingTime: 30,
         confirmTime: 15
       },
-      players: [newPlayer(socket.id, playerName, true)],
+      players: [newPlayer(pid, name, true)],
       phaseTimer: null,
+      cleanupTimer: null,
+      banned: new Set(),
       winner: null
     };
     resetRoundState(room);
     rooms.set(roomId, room);
-    socket.join(roomId);
-    callback({ success: true, roomId, room: publicRoom(room, socket.id) });
+    playerRooms.set(pid, roomId);
+    io.in(pid).socketsJoin(roomId);
+    callback({ success: true, roomId, room: publicRoom(room, pid) });
   });
 
   socket.on('room:join', ({ roomId, playerName } = {}, callback) => {
     if (typeof callback !== 'function') return;
+    const pid = socket.data.playerId;
     const cleanId = String(roomId || '').trim().toUpperCase();
     const room = rooms.get(cleanId);
     if (!room) return callback({ success: false, message: 'Комната не найдена' });
-    if (room.status !== PHASES.LOBBY) return callback({ success: false, message: 'Игра уже началась' });
-    if (room.players.length >= 30) return callback({ success: false, message: 'Комната заполнена' });
 
-    if (!room.players.find(p => p.id === socket.id)) {
-      room.players.push(newPlayer(socket.id, playerName, false));
+    const isMember = room.players.some(p => p.id === pid);
+    if (!isMember && room.banned.has(pid)) return callback({ success: false, message: 'Ведущий исключил вас из этой комнаты' });
+    if (!isMember) {
+      if (room.status !== PHASES.LOBBY) return callback({ success: false, message: 'Игра уже началась' });
+      if (room.players.length >= 30) return callback({ success: false, message: 'Комната заполнена' });
+      leaveRoom(pid);
+      const name = socket.data.user ? socket.data.user.name : playerName;
+      room.players.push(newPlayer(pid, name, false));
+      playerRooms.set(pid, cleanId);
     }
-    socket.join(cleanId);
+    io.in(pid).socketsJoin(cleanId);
     emitRoom(room);
-    callback({ success: true, roomId: cleanId, room: publicRoom(room, socket.id) });
+    callback({ success: true, roomId: cleanId, room: publicRoom(room, pid) });
+  });
+
+  // Ведущий исключает игрока из лобби до начала игры
+  socket.on('room:kick', ({ roomId, targetId } = {}) => {
+    const room = rooms.get(roomId);
+    if (!room || room.hostId !== socket.data.playerId || room.status !== PHASES.LOBBY) return;
+    if (targetId === room.hostId || !room.players.some(p => p.id === targetId)) return;
+    room.banned.add(targetId);
+    io.to(targetId).emit('room:kicked', { message: 'Ведущий исключил вас из комнаты.' });
+    io.in(targetId).socketsLeave(room.roomId);
+    removeFromLobby(room, targetId);
   });
 
   socket.on('room:update_settings', ({ roomId, deck, kamikazeFaction, times } = {}) => {
     const room = rooms.get(roomId);
-    if (!room || room.hostId !== socket.id || room.status !== PHASES.LOBBY) return;
+    if (!room || room.hostId !== socket.data.playerId || room.status !== PHASES.LOBBY) return;
     if (deck && typeof deck === 'object') {
       const clean = {};
       for (const key of Object.keys(ROLE_FACTIONS)) {
@@ -231,7 +485,7 @@ io.on('connection', (socket) => {
 
   socket.on('game:start', ({ roomId } = {}) => {
     const room = rooms.get(roomId);
-    if (!room || room.hostId !== socket.id || room.status !== PHASES.LOBBY) return;
+    if (!room || room.hostId !== socket.data.playerId || room.status !== PHASES.LOBBY) return;
 
     const totalCards = Object.values(room.settings.deck).reduce((a, b) => a + b, 0);
     if (room.players.length < 3) {
@@ -262,6 +516,7 @@ io.on('connection', (socket) => {
       player.mirrorDonorId = null;
       player.lastDoctorTarget = null;
       player.awaitingLastWords = false;
+      player.alerts = [];
     });
 
     room.status = PHASES.ROLE_REVEAL;
@@ -271,7 +526,10 @@ io.on('connection', (socket) => {
 
   socket.on('game:restart', ({ roomId } = {}) => {
     const room = rooms.get(roomId);
-    if (!room || room.hostId !== socket.id || room.status !== PHASES.GAME_OVER) return;
+    if (!room || room.status !== PHASES.GAME_OVER) return;
+    const oldHost = room.players.find(p => p.id === room.hostId);
+    if (room.hostId !== socket.data.playerId && oldHost && oldHost.connected) return;
+    room.hostId = socket.data.playerId;
     clearTimeout(room.phaseTimer);
     room.players = room.players.filter(p => p.connected);
     room.players.forEach(p => {
@@ -289,7 +547,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.ROLE_REVEAL) return;
 
-    const player = room.players.find(p => p.id === socket.id);
+    const player = room.players.find(p => p.id === socket.data.playerId);
     if (!player) return;
     player.hasRevealedCard = true;
     emitRoom(room);
@@ -305,7 +563,7 @@ io.on('connection', (socket) => {
       });
 
       emitRoom(room);
-      io.to(roomId).emit('game:phase_change', {
+      emitPhase(room, {
         status: room.status,
         round: room.round,
         timeLeft: 8,
@@ -320,10 +578,10 @@ io.on('connection', (socket) => {
     if (!room || typeof message !== 'string' || !message.trim()) return;
     if (![PHASES.LOBBY, PHASES.DAY, PHASES.VOTING, PHASES.CONFIRM_VOTE].includes(room.status)) return;
 
-    const sender = room.players.find(p => p.id === socket.id);
+    const sender = room.players.find(p => p.id === socket.data.playerId);
     if (!sender || (!sender.isAlive && room.status !== PHASES.LOBBY)) return;
 
-    io.to(roomId).emit('chat:global:message', {
+    emitChat(roomId, {
       id: randomUUID(), senderName: sender.name, message: message.trim().slice(0, 300), type: 'normal'
     });
   });
@@ -332,16 +590,13 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.NIGHT || typeof message !== 'string' || !message.trim()) return;
 
-    const sender = room.players.find(p => p.id === socket.id);
+    const sender = room.players.find(p => p.id === socket.data.playerId);
     if (sender && sender.faction === 'BLACK' && sender.isAlive) {
+      const msg = { senderName: sender.name, role: sender.role, message: message.trim().slice(0, 300) };
+      room.mafiaLog.push(msg);
+      if (room.mafiaLog.length > 100) room.mafiaLog.shift();
       room.players.forEach(p => {
-        if (p.faction === 'BLACK') {
-          io.to(p.id).emit('chat:mafia:message', {
-            senderName: sender.name,
-            role: sender.role,
-            message: message.trim().slice(0, 300)
-          });
-        }
+        if (p.faction === 'BLACK') io.to(p.id).emit('chat:mafia:message', msg);
       });
     }
   });
@@ -350,12 +605,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.MORNING_LAST_WORDS) return;
 
-    const player = room.players.find(p => p.id === socket.id);
+    const player = room.players.find(p => p.id === socket.data.playerId);
     if (!player || !player.awaitingLastWords) return;
 
     player.awaitingLastWords = false;
     if (typeof message === 'string' && message.trim()) {
-      io.to(roomId).emit('chat:global:message', {
+      emitChat(roomId, {
         id: randomUUID(), senderName: player.name, message: message.trim().slice(0, 220), type: 'last_words'
       });
     }
@@ -369,7 +624,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.NIGHT) return;
 
-    const player = room.players.find(p => p.id === socket.id);
+    const player = room.players.find(p => p.id === socket.data.playerId);
     if (!player || !player.isAlive || !ACTIVE_ROLES.has(player.role)) return;
 
     const target = room.players.find(p => p.id === targetId);
@@ -403,7 +658,7 @@ io.on('connection', (socket) => {
   socket.on('night:ready', ({ roomId } = {}) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.NIGHT) return;
-    const player = room.players.find(p => p.id === socket.id);
+    const player = room.players.find(p => p.id === socket.data.playerId);
     if (!player || !player.isAlive) return;
     socket.emit('night:action_confirmed', { role: player.role });
     markNightDone(room, player);
@@ -413,7 +668,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.VOTING) return;
 
-    const voter = room.players.find(p => p.id === socket.id);
+    const voter = room.players.find(p => p.id === socket.data.playerId);
     const target = room.players.find(p => p.id === targetId && p.isAlive);
     if (!voter || !voter.isAlive || !target) return;
 
@@ -428,7 +683,7 @@ io.on('connection', (socket) => {
   socket.on('day:confirm', ({ roomId, vote } = {}) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.CONFIRM_VOTE) return;
-    const voter = room.players.find(p => p.id === socket.id);
+    const voter = room.players.find(p => p.id === socket.data.playerId);
     if (!voter || !voter.isAlive || voter.id === room.accusedId) return;
 
     const val = vote === 'yes' ? 'yes' : 'no';
@@ -446,31 +701,32 @@ io.on('connection', (socket) => {
   socket.on('kamikaze:shoot', ({ roomId, targetId } = {}) => {
     const room = rooms.get(roomId);
     if (!room || room.status !== PHASES.KAMIKAZE_REVENGE) return;
-    if (socket.id !== room.kamikazeActorId) return;
+    if (socket.data.playerId !== room.kamikazeActorId) return;
     if (!room.players.some(p => p.id === targetId && p.isAlive)) return;
     executeKamikazeRevenge(roomId, targetId);
   });
 
   socket.on('disconnect', () => {
-    for (const [roomId, room] of rooms.entries()) {
-      const idx = room.players.findIndex(p => p.id === socket.id);
-      if (idx === -1) continue;
+    const pid = socket.data.playerId;
+    const still = io.sockets.adapter.rooms.get(pid);
+    if (still && still.size > 0) return; // у игрока открыта другая вкладка
+    const room = roomOfPlayer(pid);
+    if (!room) return;
+    const player = room.players.find(p => p.id === pid);
+    if (!player) return;
 
-      if (room.status === PHASES.LOBBY) {
-        room.players.splice(idx, 1);
-      } else {
-        room.players[idx].connected = false;
-      }
-
-      const connected = room.players.filter(p => p.connected);
-      if (connected.length === 0) {
-        clearTimeout(room.phaseTimer);
-        rooms.delete(roomId);
-        continue;
-      }
-      if (room.hostId === socket.id) room.hostId = connected[0].id;
-      emitRoom(room);
+    // Игрока НЕ выкидываем: в партии место сохраняется, в лобби даётся 3 минуты на возвращение
+    player.connected = false;
+    if (room.status === PHASES.LOBBY) {
+      clearTimeout(player.dcTimer);
+      player.dcTimer = setTimeout(() => {
+        const r = rooms.get(room.roomId);
+        const pl = r && r.players.find(p => p.id === pid);
+        if (r && r.status === PHASES.LOBBY && pl && !pl.connected) removeFromLobby(r, pid);
+      }, 3 * 60 * 1000);
     }
+    emitRoom(room);
+    scheduleCleanup(room);
   });
 });
 
@@ -506,7 +762,7 @@ function startNightPhase(roomId) {
   room.nightAnnounced = {};
 
   emitRoom(room);
-  io.to(roomId).emit('game:phase_change', {
+  emitPhase(room, {
     status: PHASES.NIGHT,
     round: room.round,
     timeLeft: room.settings.nightActionTime,
@@ -538,7 +794,7 @@ function resolveNight(roomId) {
     const puppet = actions[act.targetId];
     if (puppet && act.secondTargetId && puppet.role !== 'necromancer' && puppet.role !== 'mirror') {
       puppet.targetId = act.secondTargetId;
-      io.to(act.targetId).emit('personal:alert', '🎭 Кукловод перехватил управление вашими руками этой ночью!');
+      notify(room, act.targetId, '🎭 Кукловод перехватил управление вашими руками этой ночью!');
     }
   });
 
@@ -549,7 +805,7 @@ function resolveNight(roomId) {
       blockedPlayerIds.add(act.targetId);
       const hooker = byId(act.actorId);
       if (hooker) registerVisit(act.targetId, hooker.name);
-      io.to(act.targetId).emit('personal:alert', '💋 Этой ночью вас отвлекли — ваша способность не сработала.');
+      notify(room, act.targetId, '💋 Этой ночью вас отвлекли — ваша способность не сработала.');
     }
   });
 
@@ -572,7 +828,7 @@ function resolveNight(roomId) {
       blockedPlayerIds.add(livingTarget.id);
     } else if (deadPlayer.role === 'commissar') {
       const isBlack = livingTarget.faction === 'BLACK';
-      io.to(necro.id).emit('personal:alert', `💀 Дух Шерифа проверил ${livingTarget.name}: ${isBlack ? 'МАФИЯ' : 'НЕ МАФИЯ'}`);
+      notify(room, necro.id, `💀 Дух Шерифа проверил ${livingTarget.name}: ${isBlack ? 'МАФИЯ' : 'НЕ МАФИЯ'}`);
     }
   });
 
@@ -619,7 +875,7 @@ function resolveNight(roomId) {
       registerVisit(act.targetId, doc.name);
     } else {
       doc.lastDoctorTarget = null;
-      io.to(doc.id).emit('personal:alert', '⚕️ Нельзя лечить одного и того же игрока две ночи подряд — лечение не сработало.');
+      notify(room, doc.id, '⚕️ Нельзя лечить одного и того же игрока две ночи подряд — лечение не сработало.');
     }
   });
 
@@ -632,7 +888,7 @@ function resolveNight(roomId) {
     if (victim && victim.isAlive) {
       if (victim.role === 'lucky' && Math.random() < 0.5) {
         luckySurvivedMessage = '🍀 Ночью мафия стреляла в Счастливчика, но пуля прошла по касательной — он чудом выжил!';
-        io.to(victim.id).emit('personal:alert', '🍀 В вас стреляла мафия, но ваша пассивная Удача спасла вам жизнь!');
+        notify(room, victim.id, '🍀 В вас стреляла мафия, но ваша пассивная Удача спасла вам жизнь!');
       } else {
         killedIds.add(victim.id);
       }
@@ -650,7 +906,7 @@ function resolveNight(roomId) {
     if (target && target.isAlive && !killedIds.has(target.id) && !target.isCultMember) {
       target.isCultMember = true;
       if (leader) registerVisit(target.id, leader.name);
-      io.to(target.id).emit('personal:alert', '🕯️ Проповедник обратил вас в тайный культ Сектантов!');
+      notify(room, target.id, '🕯️ Проповедник обратил вас в тайный культ Сектантов!');
     }
   });
 
@@ -675,14 +931,14 @@ function resolveNight(roomId) {
       const target = byId(act.targetId);
       if (target) {
         const isBlack = target.faction === 'BLACK' || target.id === framedPlayerId;
-        io.to(actor.id).emit('personal:alert', `🕵️ Проверка Комиссара: ${target.name} — ${isBlack ? 'ЧЕРНЫЙ (Мафия / Подставлен)' : 'КРАСНЫЙ (Мирный)'}`);
+        notify(room, actor.id, `🕵️ Проверка Комиссара: ${target.name} — ${isBlack ? 'ЧЕРНЫЙ (Мафия / Подставлен)' : 'КРАСНЫЙ (Мирный)'}`);
       }
     }
 
     if (act.role === 'don' && act.secondTargetId) {
       const t = byId(act.secondTargetId);
       if (t) {
-        io.to(actor.id).emit('personal:alert', `🎩 Проверка Дона: ${t.name} — ${t.role === 'commissar' ? 'КОМИССАР!' : 'Не Комиссар'}`);
+        notify(room, actor.id, `🎩 Проверка Дона: ${t.name} — ${t.role === 'commissar' ? 'КОМИССАР!' : 'Не Комиссар'}`);
       }
     }
 
@@ -691,7 +947,7 @@ function resolveNight(roomId) {
       const p2 = byId(act.secondTargetId);
       if (p1 && p2) {
         const same = getEffectiveFactionForJournalist(p1, framedPlayerId) === getEffectiveFactionForJournalist(p2, framedPlayerId);
-        io.to(actor.id).emit('personal:alert', `📰 Расследование Журналиста: ${p1.name} и ${p2.name} играют за ${same ? 'ОДНУ фракцию' : 'РАЗНЫЕ фракции'}!`);
+        notify(room, actor.id, `📰 Расследование Журналиста: ${p1.name} и ${p2.name} играют за ${same ? 'ОДНУ фракцию' : 'РАЗНЫЕ фракции'}!`);
       }
     }
   });
@@ -703,7 +959,7 @@ function resolveNight(roomId) {
     const target = byId(act.targetId);
     if (!actor || !target) return;
     const guests = (visits[target.id] || []).filter(name => name !== actor.name);
-    io.to(actor.id).emit('personal:alert', `🍾 Бомж проследил за ${target.name}. Гости этой ночью: ${guests.length ? guests.join(', ') : 'никто не приходил'}.`);
+    notify(room, actor.id, `🍾 Бомж проследил за ${target.name}. Гости этой ночью: ${guests.length ? guests.join(', ') : 'никто не приходил'}.`);
   });
 
   // Применяем смерти
@@ -732,7 +988,7 @@ function resolveNight(roomId) {
     room.status = PHASES.MORNING_LAST_WORDS;
     sendSystemChat(roomId, `🌅 Наступает утро. Этой ночью погибли: ${deadNames.join(', ')}. Ожидаем их предсмертное послание (20 сек)...`);
     emitRoom(room);
-    io.to(roomId).emit('game:phase_change', {
+    emitPhase(room, {
       status: PHASES.MORNING_LAST_WORDS,
       round: room.round,
       timeLeft: 20,
@@ -791,7 +1047,7 @@ function proceedAfterMorning(roomId) {
 
   room.status = PHASES.DAY;
   emitRoom(room);
-  io.to(roomId).emit('game:phase_change', {
+  emitPhase(room, {
     status: PHASES.DAY,
     round: room.round,
     timeLeft: room.settings.discussionTime,
@@ -808,7 +1064,7 @@ function startVotingPhase(roomId) {
   room.dayVotes = {};
   sendSystemChat(roomId, '⚖️ Началось дневное голосование! Выберите кандидата на изгнание.');
   emitRoom(room);
-  io.to(roomId).emit('game:phase_change', {
+  emitPhase(room, {
     status: PHASES.VOTING,
     round: room.round,
     timeLeft: room.settings.votingTime,
@@ -864,7 +1120,7 @@ function startConfirmPhase(roomId, accused) {
   room.confirmVotes = {};
   sendSystemChat(roomId, `⚖️ Город выдвинул на казнь ${accused.name}. Вешаем игрока? Голосуем ДА или НЕТ!`);
   emitRoom(room);
-  io.to(roomId).emit('game:phase_change', {
+  emitPhase(room, {
     status: PHASES.CONFIRM_VOTE,
     round: room.round,
     timeLeft: room.settings.confirmTime,
@@ -928,7 +1184,7 @@ function executeDay(roomId, executedId) {
       room.kamikazeActorId = executed.id;
       sendSystemChat(roomId, `💣 ${executed.name} оказался КАМИКАДЗЕ! У него есть 15 секунд, чтобы утащить одного игрока за собой в могилу!`);
       emitRoom(room);
-      io.to(roomId).emit('game:phase_change', {
+      emitPhase(room, {
         status: PHASES.KAMIKAZE_REVENGE,
         round: room.round,
         timeLeft: 15,
