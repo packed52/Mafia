@@ -7,6 +7,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 const app = express();
+app.set('trust proxy', 1); // за прокси Render, чтобы определялся https
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
@@ -14,7 +15,7 @@ const io = new Server(server, {
   pingTimeout: 60000
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 const rooms = new Map();
 
@@ -1391,8 +1392,28 @@ function checkWinConditions(roomId) {
 }
 
 // Express 5 не принимает '*', поэтому обычный middleware
+// ---------- SEO: адрес сайта берётся из SITE_URL или из запроса ----------
+const baseUrl = (req) =>
+  (process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(
+    `User-agent: *\nAllow: /\nDisallow: /socket.io/\n\nSitemap: ${baseUrl(req)}/sitemap.xml\n`);
+});
+
+app.get('/sitemap.xml', (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  res.type('application/xml').send(
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    `  <url>\n    <loc>${baseUrl(req)}/</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>1.0</priority>\n  </url>\n</urlset>\n`);
+});
+
+// Главная страница: подставляем реальный адрес сайта в мета-теги
 app.use((req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8', (err, html) => {
+    if (err) return res.status(500).send('Ошибка загрузки страницы');
+    res.type('html').send(html.replace(/__SITE_URL__/g, baseUrl(req)));
+  });
 });
 
 // ---------- Telegram-бот: поиск компании для игры ----------
