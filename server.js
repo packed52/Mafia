@@ -143,9 +143,9 @@ async function issueToken(user) {
   await persistUser(user);
   return token;
 }
-function rateOk(socket) {
+function rateOk(socket, key = 'authLog') {
   const now = Date.now();
-  const log = (socket.data.authLog = (socket.data.authLog || []).filter(t => now - t < 60000));
+  const log = (socket.data[key] = (socket.data[key] || []).filter(t => now - t < 60000));
   if (log.length >= 10) return false;
   log.push(now);
   return true;
@@ -329,6 +329,8 @@ function publicRoom(room, viewerId) {
   const gameOver = room.status === PHASES.GAME_OVER;
   return {
     roomId: room.roomId,
+    title: room.title || '',
+    locked: !!room.passwordHash,
     hostId: room.hostId,
     status: room.status,
     round: room.round,
@@ -459,9 +461,22 @@ io.on('connection', (socket) => {
     leaveRoom(socket.data.playerId);
     io.to(socket.data.playerId).emit('session:none');
   });
-  socket.on('room:create', ({ playerName } = {}, callback) => {
+  socket.on('room:create', ({ playerName, title, password } = {}, callback) => {
     if (typeof callback !== 'function') return;
     const pid = socket.data.playerId;
+
+    // Название и (необязательный) пароль комнаты
+    const roomTitle = String(title || '').trim().slice(0, 30);
+    let passwordSalt = null;
+    let passwordHash = null;
+    if (typeof password === 'string' && password.length > 0) {
+      if (password.length < 3 || password.length > 30) {
+        return callback({ success: false, message: 'Пароль комнаты: от 3 до 30 символов' });
+      }
+      passwordSalt = crypto.randomBytes(16).toString('hex');
+      passwordHash = hashPassword(password, passwordSalt);
+    }
+
     leaveRoom(pid);
     const name = socket.data.user ? socket.data.user.name : playerName;
     const roomId = makeRoomId();
@@ -485,6 +500,9 @@ io.on('connection', (socket) => {
       players: [newPlayer(pid, name, true)],
       phaseTimer: null,
       cleanupTimer: null,
+      title: roomTitle,
+      passwordSalt,
+      passwordHash,
       banned: new Set(),
       winner: null
     };
@@ -495,7 +513,7 @@ io.on('connection', (socket) => {
     callback({ success: true, roomId, room: publicRoom(room, pid) });
   });
 
-  socket.on('room:join', ({ roomId, playerName } = {}, callback) => {
+  socket.on('room:join', ({ roomId, playerName, password } = {}, callback) => {
     if (typeof callback !== 'function') return;
     const pid = socket.data.playerId;
     const cleanId = String(roomId || '').trim().toUpperCase();
@@ -507,6 +525,17 @@ io.on('connection', (socket) => {
     if (!isMember) {
       if (room.status !== PHASES.LOBBY) return callback({ success: false, message: 'Игра уже началась' });
       if (room.players.length >= 30) return callback({ success: false, message: 'Комната заполнена' });
+      if (room.passwordHash) {
+        if (typeof password !== 'string' || !password) {
+          return callback({ success: false, needPassword: true, message: 'Комната закрыта. Введите пароль.' });
+        }
+        if (!rateOk(socket, 'joinLog')) return callback({ success: false, message: 'Слишком много попыток. Подождите минуту.' });
+        const a = Buffer.from(hashPassword(password, room.passwordSalt), 'hex');
+        const b = Buffer.from(room.passwordHash, 'hex');
+        if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+          return callback({ success: false, needPassword: true, message: 'Неверный пароль комнаты' });
+        }
+      }
       leaveRoom(pid);
       const name = socket.data.user ? socket.data.user.name : playerName;
       room.players.push(newPlayer(pid, name, false));
@@ -515,6 +544,26 @@ io.on('connection', (socket) => {
     io.in(pid).socketsJoin(cleanId);
     emitRoom(room);
     callback({ success: true, roomId: cleanId, room: publicRoom(room, pid) });
+  });
+
+  // Список комнат для экрана «Комнаты» на сайте (только те, что ещё в лобби)
+  socket.on('rooms:list', (_, cb) => {
+    if (typeof cb !== 'function') return;
+    const list = [];
+    for (const room of rooms.values()) {
+      if (room.status !== PHASES.LOBBY || !room.players.some(p => p.connected)) continue;
+      const host = room.players.find(p => p.id === room.hostId);
+      list.push({
+        roomId: room.roomId,
+        title: room.title || '',
+        hostName: host ? host.name : '',
+        players: room.players.length,
+        total: Object.values(room.settings.deck).reduce((a, b) => a + b, 0),
+        locked: !!room.passwordHash
+      });
+    }
+    list.sort((a, b) => b.players - a.players);
+    cb({ rooms: list.slice(0, 50) });
   });
 
   // Ведущий исключает игрока из лобби до начала игры
@@ -1400,7 +1449,7 @@ async function announceRoom(chatId, rawCode) {
 
   const host = room.players.find(p => p.id === room.hostId);
   const total = Object.values(room.settings.deck).reduce((a, b) => a + b, 0);
-  const text = `🎩 Ищут компанию для мафии!\n\n👤 Собирает: ${host ? host.name : 'игрок'}\n👥 В комнате: ${room.players.length} из ${total}\n🔑 Код комнаты: ${code}\n\nЗаходи и играй!`;
+  const text = `🎩 Ищут компанию для мафии!\n\n👤 Собирает: ${host ? host.name : 'игрок'}\n👥 В комнате: ${room.players.length} из ${total}\n🔑 Код комнаты: ${code}${room.passwordHash ? '\n🔒 Комната закрыта — пароль спросите у ведущего' : ''}\n\nЗаходи и играй!`;
   const markup = SITE_URL
     ? { inline_keyboard: [[{ text: '🎮 Присоединиться', url: `${SITE_URL}/?room=${code}` }]] }
     : undefined;
