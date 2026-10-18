@@ -3,7 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Мафия Online — Расширенное Издание</title>
+  <title>Мафия Online — играть в мафию онлайн бесплатно с друзьями</title>
+  <meta name="description" content="Мафия Online — бесплатная онлайн-игра в мафию с друзьями прямо в браузере. 16 ролей, ночные ходы, голосования, комнаты с паролем и поиск компании. Без скачивания и установки.">
+  <meta name="keywords" content="мафия онлайн, играть в мафию онлайн, мафия с друзьями, мафия бесплатно, мафия в браузере, онлайн игра мафия, настольная игра мафия онлайн">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#020617">
+  <link rel="canonical" href="__SITE_URL__/">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A9%3C/text%3E%3C/svg%3E">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Мафия Online">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:title" content="Мафия Online — играть в мафию онлайн бесплатно">
+  <meta property="og:description" content="Бесплатная мафия с друзьями в браузере: 16 ролей, комнаты с паролем, голосования и ночные ходы. Без установки.">
+  <meta property="og:url" content="__SITE_URL__/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Мафия Online — играть в мафию онлайн бесплатно">
+  <meta name="twitter:description" content="Бесплатная мафия с друзьями в браузере: 16 ролей, комнаты с паролем, голосования и ночные ходы.">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"VideoGame","name":"Мафия Online","description":"Бесплатная онлайн-игра в мафию с друзьями в браузере: 16 ролей, ночные ходы, голосования, комнаты с паролем.","url":"__SITE_URL__/","inLanguage":"ru","genre":"Party game","playMode":"MultiPlayer","applicationCategory":"Game","operatingSystem":"Any (web browser)","offers":{"@type":"Offer","price":"0","priceCurrency":"RUB"}}
+  </script>
   <script>try{if(localStorage.getItem('mafia_theme')==='light')document.documentElement.classList.add('light');}catch(e){}</script>
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script>
@@ -71,7 +89,16 @@
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans selection:bg-amber-500 selection:text-slate-950">
-  <div id="root"></div>
+  <div id="root">
+    <!-- Содержимое для поисковых роботов и медленной загрузки; React заменит его при запуске -->
+    <main class="min-h-screen flex flex-col items-center justify-center text-center p-6 space-y-4">
+      <h1 class="text-3xl font-black text-amber-500">МАФИЯ ONLINE — играть в мафию онлайн бесплатно</h1>
+      <p class="max-w-xl text-slate-300">Онлайн-игра в мафию с друзьями прямо в браузере: без скачивания и установки. Создайте комнату (открытую или с паролем), позовите игроков и выясните, кто в городе мафия.</p>
+      <p class="max-w-xl text-slate-400 text-sm">16 ролей: мирный житель, комиссар, доктор, мафия, дон, журналист, любовница, бомж, счастливчик, камикадзе, подстрекатель, самоубийца, некромант, сектант, кукловод и зеркало. Ночные ходы, дневные обсуждения, голосование и вердикт «вешаем или нет».</p>
+      <p class="text-slate-500 text-sm">Загрузка игры…</p>
+    </main>
+    <noscript><p class="text-center text-slate-300 p-6">Для игры в мафию онлайн нужен включённый JavaScript.</p></noscript>
+  </div>
 
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useRef } = React;
