@@ -1346,7 +1346,136 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ---------- Telegram-бот: поиск компании для игры ----------
+// Токен берётся ТОЛЬКО из переменной окружения TELEGRAM_BOT_TOKEN (в коде его нет).
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const SITE_URL = (process.env.SITE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+const TG_SUBS_FILE = path.join(DATA_DIR, 'tg_subs.json');
+const tgSubs = new Map();      // chatId -> включены ли уведомления
+const tgAwaiting = new Set();  // чаты, от которых ждём код комнаты
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+let tgOffset = 0;
+
+const TG_KB = {
+  keyboard: [[{ text: '🔎 Ищу компанию' }], [{ text: '🔔 Уведомления вкл/выкл' }]],
+  resize_keyboard: true
+};
+
+async function tg(method, body) {
+  const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout(65000)
+  });
+  return r.json();
+}
+const tgSay = (chatId, text, extra) => tg('sendMessage', { chat_id: chatId, text, ...extra });
+
+async function saveSub(chatId, enabled) {
+  tgSubs.set(String(chatId), enabled);
+  try {
+    if (pgPool) {
+      await pgPool.query(
+        'INSERT INTO tg_subs (chat_id, enabled) VALUES ($1,$2) ON CONFLICT (chat_id) DO UPDATE SET enabled = EXCLUDED.enabled',
+        [String(chatId), enabled]);
+    } else {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(TG_SUBS_FILE, JSON.stringify(Object.fromEntries(tgSubs)));
+    }
+  } catch (e) { console.error('Telegram: не удалось сохранить подписчика:', e.message); }
+}
+
+async function announceRoom(chatId, rawCode) {
+  const code = String(rawCode || '').trim().toUpperCase();
+  const room = rooms.get(code);
+  if (!room || room.status !== PHASES.LOBBY) {
+    return tgSay(chatId, '❌ Комната не найдена или игра в ней уже началась. Проверьте код и пришлите ещё раз.');
+  }
+  if (room.lastAnnounce && Date.now() - room.lastAnnounce < 120000) {
+    return tgSay(chatId, '⏳ Эту комнату уже объявляли недавно. Подождите пару минут.');
+  }
+  room.lastAnnounce = Date.now();
+  tgAwaiting.delete(chatId);
+
+  const host = room.players.find(p => p.id === room.hostId);
+  const total = Object.values(room.settings.deck).reduce((a, b) => a + b, 0);
+  const text = `🎩 Ищут компанию для мафии!\n\n👤 Собирает: ${host ? host.name : 'игрок'}\n👥 В комнате: ${room.players.length} из ${total}\n🔑 Код комнаты: ${code}\n\nЗаходи и играй!`;
+  const markup = SITE_URL
+    ? { inline_keyboard: [[{ text: '🎮 Присоединиться', url: `${SITE_URL}/?room=${code}` }]] }
+    : undefined;
+
+  let sent = 0;
+  for (const [id, enabled] of tgSubs) {
+    if (!enabled || id === String(chatId)) continue;
+    const res = await tgSay(id, text, markup ? { reply_markup: markup } : {}).catch(() => null);
+    if (res && res.ok) sent++;
+    else if (res && res.error_code === 403) await saveSub(id, false); // бот заблокирован
+    await sleep(60); // лимит Telegram ~30 сообщений/сек
+  }
+  return tgSay(chatId, `✅ Объявление отправлено ${sent} игрокам. Ждите, пока они зайдут в вашу комнату!`);
+}
+
+async function handleTgMessage(m) {
+  if (!m || !m.chat || m.chat.type !== 'private' || typeof m.text !== 'string') return;
+  const chatId = m.chat.id;
+  const text = m.text.trim();
+
+  if (text === '/start' || text === '/help') {
+    await saveSub(chatId, true);
+    return tgSay(chatId,
+      '🎩 Привет! Я помогаю найти компанию для игры в мафию.\n\nНажми «🔎 Ищу компанию» — и я оповещу других игроков о твоей комнате. Ты тоже будешь получать приглашения от других (отключить: «🔔 Уведомления вкл/выкл»).',
+      { reply_markup: TG_KB });
+  }
+  if (text === '🔔 Уведомления вкл/выкл' || text === '/stop') {
+    const now = tgSubs.get(String(chatId)) !== true;
+    await saveSub(chatId, now);
+    return tgSay(chatId, now ? '🔔 Уведомления включены.' : '🔕 Уведомления выключены.', { reply_markup: TG_KB });
+  }
+  if (text === '🔎 Ищу компанию' || text === '/play') {
+    if (!tgSubs.has(String(chatId))) await saveSub(chatId, true);
+    tgAwaiting.add(chatId);
+    return tgSay(chatId,
+      `Создайте комнату на сайте${SITE_URL ? `: ${SITE_URL}` : ''}\n«Начать игру» → «Создать новое лобби».\n\nПотом пришлите мне сюда 5-значный код комнаты, и я оповещу других игроков.`,
+      { reply_markup: TG_KB });
+  }
+  if (tgAwaiting.has(chatId) || /^[A-Za-z0-9]{5}$/.test(text)) {
+    return announceRoom(chatId, text);
+  }
+  return tgSay(chatId, 'Нажмите «🔎 Ищу компанию» на клавиатуре внизу 👇', { reply_markup: TG_KB });
+}
+
+async function initTelegram() {
+  if (!TG_TOKEN) { console.log('Telegram-бот выключен (нет TELEGRAM_BOT_TOKEN)'); return; }
+  try {
+    if (pgPool) {
+      await pgPool.query('CREATE TABLE IF NOT EXISTS tg_subs (chat_id TEXT PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT TRUE)');
+      (await pgPool.query('SELECT chat_id, enabled FROM tg_subs')).rows.forEach(r => tgSubs.set(r.chat_id, r.enabled));
+    } else {
+      try { Object.entries(JSON.parse(fs.readFileSync(TG_SUBS_FILE, 'utf8'))).forEach(([k, v]) => tgSubs.set(k, !!v)); } catch (e) {}
+    }
+    await tg('deleteWebhook', {});
+    console.log(`Telegram-бот запущен, подписчиков: ${tgSubs.size}`);
+  } catch (e) { console.error('Telegram: ошибка запуска:', e.message); return; }
+
+  (async function poll() {
+    for (;;) {
+      try {
+        const res = await tg('getUpdates', { offset: tgOffset, timeout: 50, allowed_updates: ['message'] });
+        if (!res.ok) { console.error('Telegram:', res.description); await sleep(5000); continue; }
+        for (const u of res.result) {
+          tgOffset = u.update_id + 1;
+          try { await handleTgMessage(u.message); } catch (e) { console.error('Telegram:', e.message); }
+        }
+      } catch (e) { await sleep(5000); }
+    }
+  })();
+}
+
 const PORT = process.env.PORT || 3001;
 initStorage()
-  .then(() => server.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`)))
+  .then(async () => {
+    server.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));
+    await initTelegram();
+  })
   .catch(e => { console.error('Не удалось подключить хранилище аккаунтов:', e.message); process.exit(1); });
