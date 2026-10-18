@@ -772,7 +772,20 @@
         : '2. Кого проверить на роль Комиссара (необязательно):';
 
       return (
-        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 md:p-6 md:pt-16 ${deathOverlay.active && deathOverlay.fresh ? 'animate-shake' : ''}`}>
+        <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-3 pt-16 pb-20 md:p-6 md:pt-16 md:pb-20 ${deathOverlay.active && deathOverlay.fresh ? 'animate-shake' : ''}`}>
+
+          {/* ===== Нижняя панель на всех страницах: Telegram и донат ===== */}
+          <div className="fixed bottom-0 inset-x-0 z-40 bg-slate-900/90 backdrop-blur border-t border-slate-800 flex items-center justify-center gap-2 px-3 pt-2"
+            style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
+            <a href="https://t.me/mafiaonline67" target="_blank" rel="noopener noreferrer"
+              className="flex-1 max-w-[220px] text-center bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2 rounded-xl text-xs sm:text-sm transition">
+              ✈️ Telegram-канал
+            </a>
+            <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
+              className="flex-1 max-w-[220px] text-center bg-amber-600 hover:bg-amber-500 text-white font-semibold py-2 rounded-xl text-xs sm:text-sm transition">
+              🍾 Поддержать бомжа
+            </a>
+          </div>
 
           {/* ===== Панель в углу: роли / тема / музыка ===== */}
           <div className="fixed top-3 left-3 z-[70] h-10 px-3 rounded-xl bg-slate-900/90 border border-slate-700 text-sm font-semibold text-slate-100 backdrop-blur shadow-lg flex items-center gap-2" title="Сейчас на сайте">
@@ -781,7 +794,7 @@
           </div>
 
           {!online && (
-            <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-semibold shadow-lg">
+            <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-[80] px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-semibold shadow-lg">
               📡 Соединение потеряно — переподключаемся…
             </div>
           )}
@@ -856,7 +869,7 @@
           {/* Кнопка возврата к предсмертной записке, пока идёт её время */}
           {!deathOverlay.active && deathOverlay.canWriteLastWords && !deathOverlay.submitted && phaseInfo.status === 'MORNING_LAST_WORDS' && (
             <button onClick={() => setDeathOverlay(prev => ({ ...prev, active: true }))}
-              className="fixed bottom-4 left-4 z-[60] px-4 py-3 rounded-xl bg-red-700 hover:bg-red-600 text-white text-sm font-bold shadow-lg animate-pulse">
+              className="fixed bottom-16 left-4 z-[60] px-4 py-3 rounded-xl bg-red-700 hover:bg-red-600 text-white text-sm font-bold shadow-lg animate-pulse">
               ✍️ Написать предсмертную записку ({timerLeft} сек)
             </button>
           )}
@@ -991,17 +1004,6 @@
                 className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-extrabold text-lg py-4 rounded-2xl shadow-xl transition">
                 🎮 Начать игру
               </button>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <a href="https://t.me/mafiaonline67" target="_blank" rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold py-3 rounded-xl text-sm shadow-lg transition">
-                  ✈️ Наш Telegram-канал
-                </a>
-                <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 font-semibold py-3 rounded-xl text-sm transition">
-                  🍾 Поддержать бомжа
-                </a>
-              </div>
             </div>
           )}
 
