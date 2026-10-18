@@ -421,6 +421,15 @@
       const [authError, setAuthError] = useState('');
       const [onlineCount, setOnlineCount] = useState(0);
       const [commissarMode, setCommissarMode] = useState('check');
+      const [showCreate, setShowCreate] = useState(false);
+      const [createTitle, setCreateTitle] = useState('');
+      const [createType, setCreateType] = useState('open'); // 'open' | 'closed'
+      const [createPassword, setCreatePassword] = useState('');
+      const [joinPassword, setJoinPassword] = useState('');
+      const [needPassword, setNeedPassword] = useState(false);
+      const [roomsList, setRoomsList] = useState([]);
+      const [pwRoom, setPwRoom] = useState(null);
+      const [pwInput, setPwInput] = useState('');
 
       const chatEndRef = useRef(null);
       const revealTimeoutRef = useRef(null);
@@ -604,6 +613,14 @@
       // Вошли в аккаунт — ник подставляется сам
       useEffect(() => { if (authUser) setPlayerName(authUser.name); }, [authUser]);
 
+      // Экран «Комнаты»: обновляем список каждые 4 секунды
+      useEffect(() => {
+        if (screen !== 'ROOMS') return;
+        refreshRooms();
+        const t = setInterval(refreshRooms, 4000);
+        return () => clearInterval(t);
+      }, [screen]);
+
       const doAuth = (mode) => {
         setAuthError('');
         socket.emit('auth:' + mode, { name: authName, password: authPass }, (res) => {
@@ -654,17 +671,41 @@
 
       const createRoom = () => {
         if (!playerName.trim()) return alert('Введите ваш никнейм!');
-        socket.emit('room:create', { playerName: playerName.trim() }, (res) => {
-          if (res.success) { setRoomData(res.room); setRoomIdInput(res.roomId); setScreen('LOBBY'); }
+        if (createType === 'closed' && createPassword.length < 3) return alert('Пароль закрытой комнаты — от 3 символов');
+        socket.emit('room:create', {
+          playerName: playerName.trim(),
+          title: createTitle.trim(),
+          password: createType === 'closed' ? createPassword : ''
+        }, (res) => {
+          if (res.success) {
+            setRoomData(res.room); setRoomIdInput(res.roomId); setShowCreate(false);
+            setCreatePassword(''); setCreateTitle(''); setScreen('LOBBY');
+          } else {
+            alert(res.message || 'Не удалось создать комнату');
+          }
+        });
+      };
+
+      const joinRoomWith = (code, password) => {
+        if (!playerName.trim()) return alert('Введите ваш никнейм!');
+        socket.emit('room:join', { roomId: code, playerName: playerName.trim(), password }, (res) => {
+          if (res.success) {
+            setRoomData(res.room); setNeedPassword(false); setPwRoom(null);
+            setPwInput(''); setJoinPassword(''); setScreen('LOBBY');
+          } else {
+            if (res.needPassword) setNeedPassword(true);
+            alert(res.message);
+          }
         });
       };
 
       const joinRoom = () => {
-        if (!playerName.trim() || !roomIdInput.trim()) return alert('Укажите никнейм и код комнаты!');
-        socket.emit('room:join', { roomId: roomIdInput.trim(), playerName: playerName.trim() }, (res) => {
-          if (res.success) { setRoomData(res.room); setScreen('LOBBY'); }
-          else alert(res.message);
-        });
+        if (!roomIdInput.trim()) return alert('Укажите код комнаты!');
+        joinRoomWith(roomIdInput.trim(), joinPassword);
+      };
+
+      const refreshRooms = () => {
+        socket.emit('rooms:list', {}, (res) => setRoomsList((res && res.rooms) || []));
       };
 
       const updateDeckCount = (roleKey, delta) => {
@@ -1007,6 +1048,58 @@
             </div>
           )}
 
+          {/* ===== Список комнат ===== */}
+          {screen === 'ROOMS' && (
+            <div className="my-auto max-w-lg w-full bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4 fade-in">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-slate-100">📋 Комнаты</h2>
+                <button onClick={refreshRooms} className="text-xs text-amber-400 underline">Обновить</button>
+              </div>
+
+              {authUser ? (
+                <div className="text-xs text-slate-400">Вы войдёте как <b className="text-slate-100">{authUser.name}</b></div>
+              ) : (
+                <input type="text" placeholder="Ваш игровой никнейм" maxLength={20} value={playerName}
+                  onChange={e => { setPlayerName(e.target.value); writeLS('mafia_nick', e.target.value); }}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-amber-500" />
+              )}
+
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                {roomsList.length === 0 ? (
+                  <p className="text-sm text-slate-400 text-center py-6">Пока нет комнат в ожидании. Создайте свою!</p>
+                ) : roomsList.map(r => (
+                  <div key={r.roomId} className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-100 truncate">{r.locked ? '🔒 ' : '🌐 '}{r.title || `Комната ${r.hostName}`}</div>
+                      <div className="text-xs text-slate-400">Ведущий: {r.hostName} • Игроков: {r.players}/{r.total} • Код {r.roomId}</div>
+                    </div>
+                    <button onClick={() => { if (r.locked) { setPwRoom(r); setPwInput(''); } else joinRoomWith(r.roomId, ''); }}
+                      className="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-sm transition">
+                      Войти
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {pwRoom && (
+                <div className="bg-slate-950 border border-amber-500/40 rounded-xl p-3 space-y-2">
+                  <p className="text-xs text-slate-300">Пароль для «{pwRoom.title || `Комната ${pwRoom.hostName}`}»:</p>
+                  <input type="password" placeholder="Пароль комнаты" value={pwInput}
+                    onChange={e => setPwInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') joinRoomWith(pwRoom.roomId, pwInput); }}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500" />
+                  <div className="flex gap-2">
+                    <button onClick={() => joinRoomWith(pwRoom.roomId, pwInput)}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-sm transition">Войти</button>
+                    <button onClick={() => setPwRoom(null)} className="px-3 text-xs text-slate-400 hover:text-slate-100">Отмена</button>
+                  </div>
+                </div>
+              )}
+
+              <button onClick={() => setScreen('JOIN')} className="w-full text-xs text-slate-400 hover:text-slate-100 underline">← Назад</button>
+            </div>
+          )}
+
           {/* ===== Экран 1: вход ===== */}
           {screen === 'JOIN' && (
             <div className="my-auto max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
@@ -1061,17 +1154,57 @@
                 <input type="text" placeholder="Код комнаты (если пригласил друг)" value={roomIdInput}
                   onChange={e => setRoomIdInput(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 uppercase focus:outline-none focus:border-amber-500" />
-                <button onClick={joinRoom} className="w-full bg-slate-800 hover:bg-slate-700 font-semibold py-3 rounded-xl transition">
+                {needPassword && (
+                  <input type="password" placeholder="Пароль комнаты" value={joinPassword}
+                    onChange={e => setJoinPassword(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') joinRoom(); }}
+                    className="w-full bg-slate-950 border border-amber-500/50 rounded-xl px-4 py-3 focus:outline-none focus:border-amber-500" />
+                )}
+                <button onClick={joinRoom}
+                  className="w-full bg-slate-800 hover:bg-slate-700 font-semibold py-3 rounded-xl transition">
                   Войти по коду комнаты
+                </button>
+                <button onClick={() => setScreen('ROOMS')}
+                  className="w-full bg-slate-800 hover:bg-slate-700 font-semibold py-3 rounded-xl transition">
+                  📋 Список комнат
                 </button>
                 <div className="relative flex py-1 items-center">
                   <div className="flex-grow border-t border-slate-800"></div>
                   <span className="flex-shrink mx-3 text-slate-500 text-xs uppercase">или</span>
                   <div className="flex-grow border-t border-slate-800"></div>
                 </div>
-                <button onClick={createRoom} className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg">
-                  Создать новое лобби (Хост)
-                </button>
+                {showCreate ? (
+                  <div className="space-y-2 bg-slate-950 border border-amber-500/30 rounded-xl p-3">
+                    <input type="text" placeholder="Название комнаты (необязательно)" maxLength={30} value={createTitle}
+                      onChange={e => setCreateTitle(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500" />
+                    <div className="grid grid-cols-2 gap-2 text-xs font-semibold">
+                      <button onClick={() => setCreateType('open')}
+                        className={`py-2 rounded-lg border ${createType === 'open' ? 'border-emerald-500 text-emerald-400 bg-emerald-950/30' : 'border-slate-800 text-slate-400'}`}>
+                        🌐 Открытая
+                      </button>
+                      <button onClick={() => setCreateType('closed')}
+                        className={`py-2 rounded-lg border ${createType === 'closed' ? 'border-amber-500 text-amber-400 bg-amber-950/30' : 'border-slate-800 text-slate-400'}`}>
+                        🔒 С паролем
+                      </button>
+                    </div>
+                    {createType === 'closed' && (
+                      <input type="text" placeholder="Пароль комнаты (3–30 символов)" maxLength={30} value={createPassword}
+                        onChange={e => setCreatePassword(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500" />
+                    )}
+                    <p className="text-[11px] text-slate-400">Комната будет видна в общем списке. {createType === 'closed' ? 'Войти смогут только те, кто знает пароль.' : 'Войти сможет любой желающий.'}</p>
+                    <div className="flex gap-2">
+                      <button onClick={createRoom} className="flex-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-lg text-sm transition">Создать комнату</button>
+                      <button onClick={() => setShowCreate(false)} className="px-3 text-xs text-slate-400 hover:text-slate-100">Отмена</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => setShowCreate(true)}
+                    className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg">
+                    Создать новое лобби (Хост)
+                  </button>
+                )}
                 <button onClick={() => setScreen('MENU')} className="w-full text-xs text-slate-400 hover:text-slate-100 underline pt-1">
                   ← В главное меню
                 </button>
@@ -1088,6 +1221,9 @@
                     <div>
                       <span className="text-xs text-amber-500 font-bold uppercase">Код приглашения</span>
                       <h2 className="text-3xl font-mono font-black tracking-wider text-slate-100">{roomData.roomId}</h2>
+                      {(roomData.title || roomData.locked) && (
+                        <p className="text-xs text-slate-400 mt-0.5">{roomData.locked ? '🔒 ' : ''}{roomData.title}</p>
+                      )}
                     </div>
                     <div className="text-right">
                       <span className="text-xs text-slate-400">Игроков / Карт</span>
