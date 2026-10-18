@@ -76,8 +76,7 @@ const NIGHT_PHRASES = {
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 let db = { users: [] };
-try { db = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch (e) { /* файла ещё нет */ }
-if (!Array.isArray(db.users)) db.users = [];
+let pgPool = null;
 
 function saveUsers() {
   try {
@@ -89,15 +88,59 @@ function saveUsers() {
     console.error('Не удалось сохранить аккаунты:', e.message);
   }
 }
+// Хранилище аккаунтов:
+//  - если задана переменная DATABASE_URL — PostgreSQL (аккаунты хранятся навсегда, переживают перезапуски);
+//  - иначе файл data/users.json (на Render/Heroku без диска он стирается при каждом перезапуске!).
+async function initStorage() {
+  if (process.env.DATABASE_URL) {
+    const { Pool } = require('pg');
+    pgPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false }
+    });
+    await pgPool.query(`CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_lower TEXT UNIQUE NOT NULL,
+      salt TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      tokens JSONB NOT NULL DEFAULT '[]'
+    )`);
+    const r = await pgPool.query('SELECT id, name, name_lower, salt, hash, tokens FROM users');
+    db.users = r.rows.map(row => ({
+      id: row.id, name: row.name, nameLower: row.name_lower,
+      salt: row.salt, hash: row.hash, tokens: Array.isArray(row.tokens) ? row.tokens : []
+    }));
+    console.log(`Аккаунты: PostgreSQL, загружено ${db.users.length}`);
+  } else {
+    try { db = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch (e) { /* файла ещё нет */ }
+    if (!Array.isArray(db.users)) db.users = [];
+    console.warn(`Аккаунты: файл ${USERS_FILE} (загружено ${db.users.length}). ` +
+      'ВНИМАНИЕ: на хостинге без постоянного диска файл стирается при перезапуске — задайте DATABASE_URL.');
+  }
+}
+
+async function persistUser(user) {
+  if (pgPool) {
+    await pgPool.query(
+      `INSERT INTO users (id, name, name_lower, salt, hash, tokens) VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+       ON CONFLICT (id) DO UPDATE SET tokens = EXCLUDED.tokens`,
+      [user.id, user.name, user.nameLower, user.salt, user.hash, JSON.stringify(user.tokens)]
+    );
+  } else {
+    saveUsers();
+  }
+}
+
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
 const hashPassword = (pw, salt) => crypto.scryptSync(pw, salt, 64).toString('hex');
 const findUserByName = (name) => db.users.find(u => u.nameLower === String(name).toLowerCase());
 const findUserByToken = (token) => (token ? db.users.find(u => u.tokens.includes(sha(token))) : null);
-function issueToken(user) {
+async function issueToken(user) {
   const token = crypto.randomBytes(32).toString('hex');
   user.tokens.push(sha(token));
   if (user.tokens.length > 10) user.tokens.shift();
-  saveUsers();
+  await persistUser(user);
   return token;
 }
 function rateOk(socket) {
@@ -363,7 +406,7 @@ io.on('connection', (socket) => {
   // Клиент сообщает, что готов принять состояние (после регистрации обработчиков)
   socket.on('client:ready', () => sendState(socket));
 
-  socket.on('auth:register', ({ name, password } = {}, cb) => {
+  socket.on('auth:register', async ({ name, password } = {}, cb) => {
     if (typeof cb !== 'function') return;
     if (!rateOk(socket)) return cb({ success: false, message: 'Слишком много попыток. Подождите минуту.' });
     const n = String(name || '').trim();
@@ -375,26 +418,40 @@ io.on('connection', (socket) => {
     const salt = crypto.randomBytes(16).toString('hex');
     const user = { id: 'u_' + randomUUID(), name: n, nameLower: n.toLowerCase(), salt, hash: hashPassword(password, salt), tokens: [] };
     db.users.push(user);
-    cb({ success: true, token: issueToken(user), name: n });
+    try {
+      cb({ success: true, token: await issueToken(user), name: n });
+    } catch (e) {
+      console.error('Ошибка сохранения аккаунта:', e.message);
+      db.users = db.users.filter(u => u.id !== user.id);
+      cb({ success: false, message: 'Не удалось сохранить аккаунт. Попробуйте позже.' });
+    }
   });
 
-  socket.on('auth:login', ({ name, password } = {}, cb) => {
+  socket.on('auth:login', async ({ name, password } = {}, cb) => {
     if (typeof cb !== 'function') return;
     if (!rateOk(socket)) return cb({ success: false, message: 'Слишком много попыток. Подождите минуту.' });
     const user = findUserByName(String(name || '').trim());
-    if (!user || typeof password !== 'string') return cb({ success: false, message: 'Неверный ник или пароль' });
+    if (!user) return cb({ success: false, message: 'Аккаунт с таким ником не найден. Проверьте ник или зарегистрируйтесь.' });
+    if (typeof password !== 'string') return cb({ success: false, message: 'Введите пароль' });
     const a = Buffer.from(hashPassword(password, user.salt), 'hex');
     const b = Buffer.from(user.hash, 'hex');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return cb({ success: false, message: 'Неверный ник или пароль' });
-    cb({ success: true, token: issueToken(user), name: user.name });
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return cb({ success: false, message: 'Неверный пароль' });
+    try {
+      cb({ success: true, token: await issueToken(user), name: user.name });
+    } catch (e) {
+      console.error('Ошибка входа:', e.message);
+      cb({ success: false, message: 'Ошибка сервера. Попробуйте позже.' });
+    }
   });
 
-  socket.on('auth:logout', ({ token } = {}, cb) => {
-    const user = findUserByToken(typeof token === 'string' ? token : '');
-    if (user) {
-      user.tokens = user.tokens.filter(h => h !== sha(token));
-      saveUsers();
-    }
+  socket.on('auth:logout', async ({ token } = {}, cb) => {
+    try {
+      const user = findUserByToken(typeof token === 'string' ? token : '');
+      if (user) {
+        user.tokens = user.tokens.filter(h => h !== sha(token));
+        await persistUser(user);
+      }
+    } catch (e) { console.error('Ошибка выхода:', e.message); }
     if (typeof cb === 'function') cb();
   });
 
@@ -642,13 +699,7 @@ io.on('connection', (socket) => {
     // Некромант выбирает мертвого, остальные — живых
     if (player.role === 'necromancer' ? target.isAlive : !target.isAlive) return;
 
-    if (player.role === 'commissar' && mode === 'shoot') {
-      if (player.hasShot) {
-        notify(room, player.id, '🔫 Ваш единственный патрон уже потрачен — можно только проверять.');
-        return;
-      }
-      if (target.id === player.id) return;
-    }
+    if (player.role === 'commissar' && mode === 'shoot' && target.id === player.id) return;
 
     let second = null;
     if (secondTargetId) {
@@ -920,12 +971,11 @@ function resolveNight(roomId) {
     killedIds.add(necromancerKillTarget);
   }
 
-  // Выстрел Комиссара (один патрон на игру). Доктор может спасти цель.
+  // Выстрел Комиссара (каждую ночь на выбор: проверка или выстрел). Доктор может спасти цель.
   Object.values(actions).forEach(act => {
     if (act.role !== 'commissar' || act.mode !== 'shoot' || blockedPlayerIds.has(act.actorId) || !act.targetId) return;
     const com = byId(act.actorId);
-    if (!com || com.hasShot) return;
-    com.hasShot = true;
+    if (!com) return;
     registerVisit(act.targetId, com.name);
     notify(room, com.id, '🔫 Вы сделали выстрел.');
     if (!healedTargets.has(act.targetId)) killedIds.add(act.targetId);
@@ -1297,4 +1347,6 @@ app.use((req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`));
+initStorage()
+  .then(() => server.listen(PORT, () => console.log(`Сервер запущен на порту ${PORT}`)))
+  .catch(e => { console.error('Не удалось подключить хранилище аккаунтов:', e.message); process.exit(1); });
