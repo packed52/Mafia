@@ -383,9 +383,9 @@
 
     // ---------- Приложение ----------
     function App() {
-      const [screen, setScreen] = useState('MENU');
+      const [screen, setScreen] = useState(() => (new URLSearchParams(location.search).get('room') ? 'JOIN' : 'MENU'));
       const [playerName, setPlayerName] = useState(() => readLS('mafia_nick', ''));
-      const [roomIdInput, setRoomIdInput] = useState('');
+      const [roomIdInput, setRoomIdInput] = useState(() => (new URLSearchParams(location.search).get('room') || '').toUpperCase().slice(0, 8));
       const [roomData, setRoomData] = useState(null);
       const [myRole, setMyRole] = useState(null);
       const [isCardFlipped, setIsCardFlipped] = useState(false);
