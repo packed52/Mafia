@@ -113,7 +113,7 @@
         description: 'Пассивный навык «Удача»: если ночью мафия стреляет в него, шанс выжить — 50%. При успехе Счастливчик остается жив, а мафия считает выстрел состоявшимся.',
         winCondition: 'Побеждает вместе с мирными жителями.' },
       commissar: { name: 'Комиссар (Шериф)', icon: '🕵️', factionLabel: RED_LABEL, badgeClass: BADGE.RED, targetMode: 'SINGLE_ALIVE',
-        description: 'Каждую ночь выбирает: проверить игрока на принадлежность к мафии ИЛИ выстрелить в него (один патрон на всю игру; Доктор может спасти цель). Если игрока в эту же ночь подставил Подстрекатель, проверка покажет «Черный» статус.',
+        description: 'Каждую ночь выбирает: проверить игрока на принадлежность к мафии ИЛИ выстрелить в него (Доктор может спасти цель). Если игрока в эту же ночь подставил Подстрекатель, проверка покажет «Черный» статус.',
         winCondition: 'Побеждает вместе с мирными жителями.' },
       doctor: { name: 'Доктор', icon: '⚕️', factionLabel: RED_LABEL, badgeClass: BADGE.RED, targetMode: 'SINGLE_ALIVE',
         description: 'Каждую ночь выбирает игрока, которого спасает от смертельного покушения. Одного и того же человека (включая себя) нельзя лечить две ночи подряд.',
@@ -383,7 +383,7 @@
 
     // ---------- Приложение ----------
     function App() {
-      const [screen, setScreen] = useState('JOIN');
+      const [screen, setScreen] = useState('MENU');
       const [playerName, setPlayerName] = useState(() => readLS('mafia_nick', ''));
       const [roomIdInput, setRoomIdInput] = useState('');
       const [roomData, setRoomData] = useState(null);
@@ -486,7 +486,7 @@
           resetGameState();
           setRoomData(null);
           setMyRole(null);
-          setScreen('JOIN');
+          setScreen(sc => (sc === 'MENU' ? 'MENU' : 'JOIN'));
         });
 
         socket.on('connect', () => { setOnline(true); socket.emit('client:ready'); });
@@ -715,7 +715,7 @@
         if (needsSecond && !secondaryTarget) return alert('Выберите вторую цель!');
         socket.emit('night:action', {
           roomId: roomData.roomId, targetId: primaryTarget, secondTargetId: secondaryTarget,
-          mode: myRole === 'commissar' ? (me?.hasShot ? 'check' : commissarMode) : undefined
+          mode: myRole === 'commissar' ? commissarMode : undefined
         });
       };
 
@@ -761,7 +761,7 @@
         : myRole === 'puppeteer' ? '1. Выберите Марионетку (чей ход перенаправить):'
         : myRole === 'journalist' ? '1. Выберите первого игрока для сравнения фракций:'
         : myRole === 'don' ? '1. Выберите жертву для выстрела мафии:'
-        : myRole === 'commissar' ? (commissarMode === 'shoot' && !me?.hasShot ? '1. Выберите, в кого выстрелить:' : '1. Выберите, кого проверить:')
+        : myRole === 'commissar' ? (commissarMode === 'shoot' ? '1. Выберите, в кого выстрелить:' : '1. Выберите, кого проверить:')
         : myRole === 'mirror' ? 'Выберите донора (чью роль скопируете после его гибели):'
         : 'Выберите цель ночной способности:';
 
@@ -787,12 +787,7 @@
           )}
 
           <div className="fixed top-3 right-3 z-[70] flex items-center gap-2">
-            {/* Ссылка открывается в новой вкладке — игра остаётся открытой, а при возврате сессия восстановится */}
-            <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
-              title="Поддержать бомжа"
-              className="h-10 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold flex items-center gap-1.5 shadow-lg transition">
-              <span>🍾</span><span className="hidden sm:inline">Поддержать бомжа</span>
-            </a>
+            
             {roomData && screen !== 'JOIN' && (
               <button onClick={leaveCurrentRoom} title="Выйти из комнаты"
                 className="h-10 w-10 rounded-xl bg-slate-900/90 border border-slate-700 text-lg hover:bg-slate-800 backdrop-blur shadow-lg transition">🚪</button>
@@ -981,15 +976,42 @@
             </div>
           )}
 
+          {/* ===== Главное меню ===== */}
+          {screen === 'MENU' && (
+            <div className="my-auto max-w-md w-full text-center space-y-8 fade-in">
+              <div className="space-y-4">
+                <div className="text-6xl">🎩</div>
+                <h1 className="text-4xl md:text-5xl font-black tracking-wider text-amber-500">МАФИЯ ONLINE</h1>
+                <p className="text-sm md:text-base text-slate-300 leading-relaxed">
+                  Онлайн-игра в мафию с друзьями. Создайте комнату, позовите игроков по коду и выясните, кто в городе предатель: тайные ночные ходы, жаркие споры и голосования.
+                </p>
+              </div>
+
+              <button onClick={() => setScreen('JOIN')}
+                className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-extrabold text-lg py-4 rounded-2xl shadow-xl transition">
+                🎮 Начать игру
+              </button>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <a href="https://t.me/mafiaonline67" target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold py-3 rounded-xl text-sm shadow-lg transition">
+                  ✈️ Наш Telegram-канал
+                </a>
+                <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 font-semibold py-3 rounded-xl text-sm transition">
+                  🍾 Поддержать бомжа
+                </a>
+              </div>
+            </div>
+          )}
+
           {/* ===== Экран 1: вход ===== */}
           {screen === 'JOIN' && (
             <div className="my-auto max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
               <div className="text-center space-y-1">
-                <span className="text-xs uppercase tracking-widest px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                  Extended Edition • 16 Ролей
-                </span>
+                
                 <h1 className="text-3xl font-extrabold tracking-wider text-amber-500 pt-2">МАФИЯ ONLINE</h1>
-                <p className="text-xs text-slate-400">Карточная механика, Секта, Некромант, Кукловод и Предсмертные записки</p>
+                
               </div>
               <div className="space-y-4">
                 {authUser ? (
@@ -1027,7 +1049,7 @@
                         </div>
                       </div>
                     ) : (
-                      <button onClick={() => { setAuthMode('register'); setAuthName(playerName); setAuthError(''); }}
+                      <button onClick={() => { setAuthMode('login'); setAuthName(playerName); setAuthError(''); }}
                         className="text-xs text-amber-400 underline">
                         🔑 Войти или зарегистрироваться (ник сохранится)
                       </button>
@@ -1048,10 +1070,9 @@
                 <button onClick={createRoom} className="w-full bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg">
                   Создать новое лобби (Хост)
                 </button>
-                <a href="https://www.donationalerts.com/r/packedclank5" target="_blank" rel="noopener noreferrer"
-                  className="block text-center w-full border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 font-semibold py-2.5 rounded-xl text-sm transition">
-                  🍾 Поддержать бомжа
-                </a>
+                <button onClick={() => setScreen('MENU')} className="w-full text-xs text-slate-400 hover:text-slate-100 underline pt-1">
+                  ← В главное меню
+                </button>
               </div>
             </div>
           )}
@@ -1358,12 +1379,12 @@
                             {myRole === 'commissar' && (
                               <div className="grid grid-cols-2 gap-2">
                                 <button onClick={() => setCommissarMode('check')}
-                                  className={`py-2 rounded-xl border text-xs font-bold transition ${commissarMode === 'check' || me?.hasShot ? 'bg-indigo-600/30 border-indigo-400 text-indigo-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+                                  className={`py-2 rounded-xl border text-xs font-bold transition ${commissarMode === 'check' ? 'bg-indigo-600/30 border-indigo-400 text-indigo-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
                                   🔍 Проверить
                                 </button>
-                                <button onClick={() => { if (!me?.hasShot) setCommissarMode('shoot'); }} disabled={!!me?.hasShot}
-                                  className={`py-2 rounded-xl border text-xs font-bold transition disabled:opacity-40 ${commissarMode === 'shoot' && !me?.hasShot ? 'bg-red-700/40 border-red-400 text-red-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
-                                  🔫 Выстрелить {me?.hasShot ? '(патрон потрачен)' : '(1 патрон)'}
+                                <button onClick={() => setCommissarMode('shoot')}
+                                  className={`py-2 rounded-xl border text-xs font-bold transition ${commissarMode === 'shoot' ? 'bg-red-700/40 border-red-400 text-red-200' : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+                                  🔫 Выстрелить
                                 </button>
                               </div>
                             )}
